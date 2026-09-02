@@ -1,0 +1,178 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PaymentMethod {
+  UPI
+  CARD
+  NETBANKING
+  MANDATE
+  WALLET
+}
+
+enum PaymentStatus {
+  FAILED
+  RECOVERED
+  RECOVERING
+  NEEDS_APPROVAL
+  SUPPRESSED
+  ABANDONED
+  SUCCESS
+}
+
+enum FailureCategory {
+  TECHNICAL
+  INSUFFICIENT_FUNDS
+  AUTHENTICATION
+  EXPIRED_OR_INVALID
+  RISK_AND_FRAUD
+  CUSTOMER_DROPOUT
+  MANDATE_ISSUE
+}
+
+enum RecoveryActionType {
+  IMMEDIATE_RETRY
+  OPTIMAL_DELAYED_RETRY
+  WHATSAPP_NUDGE
+  PAYMENT_LINK
+  MANDATE_UPDATE
+  HUMAN_ESCALATION
+  DO_NOT_RECOVER
+}
+
+model Merchant {
+  id              String         @id @default(cuid())
+  name            String
+  businessType    String
+  currency        String         @default("INR")
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  transactions    Transaction[]
+  policies        PolicyGuardrails?
+  experiments     RecoveryExperiment[]
+}
+
+model Customer {
+  id                String        @id @default(cuid())
+  name              String
+  email             String
+  phone             String
+  segment           String        @default("CONSUMER") // VIP, ENTERPRISE, SMB, CONSUMER
+  lifetimeValue     Float         @default(0)
+  totalTransactions Int           @default(0)
+  pastRecoveries    Int           @default(0)
+  fatigueScore      Int           @default(0) // 0-100
+  riskScore         Int           @default(0) // 0-100
+  upiVpa            String?
+  cardLast4         String?
+  bankName          String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  transactions      Transaction[]
+}
+
+model Transaction {
+  id                    String             @id @default(cuid())
+  merchantId            String
+  merchant              Merchant           @relation(fields: [merchantId], references: [id])
+  customerId            String
+  customer              Customer           @relation(fields: [customerId], references: [id])
+  orderId               String
+  paymentId             String?
+  amount                Float
+  currency              String             @default("INR")
+  paymentMethod         PaymentMethod
+  status                PaymentStatus      @default(FAILED)
+  failureCode           String
+  failureMessage        String
+  failureCategory       FailureCategory
+  rawGatewayResponse    Json?
+  
+  // AI & Recovery Metrics
+  recoveryProbability   Float              @default(0.5)
+  expectedRecoveryValue Float              @default(0.0)
+  recommendedAction     RecoveryActionType
+  actionConfidence      Int                @default(80)
+  aiRationale           String
+  whyNotRationale       String?
+  
+  // Policy & Approval
+  requiresApproval      Boolean            @default(false)
+  approvalReason        String?
+  approvedBy            String?
+  approvedAt            DateTime?
+  
+  // Execution
+  executionChannel      String?
+  executionStatus       String?
+  recoveredAt           DateTime?
+  recoveredAmount       Float?
+  
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  decisionTraces        DecisionTrace[]
+}
+
+model DecisionTrace {
+  id            String       @id @default(cuid())
+  transactionId String
+  transaction   Transaction  @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  step          Int
+  name          String
+  status        String
+  summary       String
+  details       Json?
+  timestamp     DateTime     @default(now())
+}
+
+model PolicyGuardrails {
+  id                          String    @id @default(cuid())
+  merchantId                  String    @unique
+  merchant                    Merchant  @relation(fields: [merchantId], references: [id])
+  autoApproveMaxAmount        Float     @default(15000)
+  minConfidenceForAutoApprove Int       @default(80)
+  maxCustomerFatigueThreshold Int       @default(70)
+  maxRetriesPerCustomerPerWeek Int      @default(3)
+  disputeRiskBlockThreshold   Int       @default(60)
+  allowAutomatedWhatsApp      Boolean   @default(true)
+  allowAutomatedPaymentLinks  Boolean   @default(true)
+  humanApprovalForVIPs        Boolean   @default(true)
+  nightHoursRetrySilence      Boolean   @default(true)
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+}
+
+model RecoveryExperiment {
+  id             String    @id @default(cuid())
+  merchantId     String
+  merchant       Merchant  @relation(fields: [merchantId], references: [id])
+  title          String
+  hypothesis     String
+  status         String    @default("RUNNING")
+  totalTraffic   Int       @default(0)
+  startDate      DateTime  @default(now())
+  endDate        DateTime?
+  controlArm     Json
+  variantArms    Json
+  insights       String[]
+}
+
+model AuditLog {
+  id             String    @id @default(cuid())
+  actorType      String
+  actorName      String
+  action         String
+  entityType     String
+  entityId       String
+  details        String
+  integrityHash  String
+  timestamp      DateTime  @default(now())
+}

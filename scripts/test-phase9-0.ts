@@ -601,6 +601,7 @@ async function runPhase90Suite() {
   console.log('\n================================================================');
   console.log('✅ ALL 21 PHASE 9.0 VERIFICATION CHECKS PASSED');
   console.log('================================================================\n');
+  process.exit(0);
 }
 
 runPhase90Suite().catch((err) => {

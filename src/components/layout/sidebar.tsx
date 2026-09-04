@@ -33,7 +33,7 @@ interface NavItem {
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { merchant, isDemoMode, setIsDemoMode } = useAppState();
+  const { merchant, isDemoMode, setIsDemoMode, currentMerchant, currentUser } = useAppState();
 
   const navItems: NavItem[] = [
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
@@ -73,18 +73,22 @@ export function Sidebar() {
         </Link>
       </div>
 
-      {/* Merchant Context */}
+      {/* Dynamic Merchant Context */}
       <div className="px-3 pt-3">
         <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200/80 flex items-center justify-between">
           <div className="flex items-center gap-2 overflow-hidden">
             <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
             <div className="truncate">
-              <p className="text-xs font-medium text-slate-800 truncate">SaaSify India</p>
-              <p className="text-[10px] text-slate-500 font-mono">Live Gateway Sync</p>
+              <p className="text-xs font-semibold text-slate-800 truncate">
+                {currentMerchant?.name || 'SaaSify India'}
+              </p>
+              <p className="text-[10px] text-slate-500 font-mono">
+                {currentUser?.role === 'OPERATOR' ? 'Operator Console' : 'Live Gateway Sync'}
+              </p>
             </div>
           </div>
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-200/80 text-slate-700 font-medium">
-            PROD
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-200/80 text-slate-700 font-medium uppercase">
+            {currentUser?.role || 'PROD'}
           </span>
         </div>
       </div>

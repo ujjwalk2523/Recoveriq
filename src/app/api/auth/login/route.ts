@@ -115,12 +115,40 @@ export async function POST(req: NextRequest) {
         merchantId = legacyUser.merchantId;
         merchantName = legacyUser.merchant?.name || 'RecoverIQ Merchant';
         passwordValid = await bcrypt.compare(password, legacyUser.passwordHash);
-      } else if (process.env.APP_ENV !== 'production' && (email === 'merchant@saasify.in' || email === 'admin@saasify.in') && password === 'password123') {
-        // Dev fallback
-        userId = 'usr_demo_admin';
-        userDisplayName = 'Ujjwal (Admin)';
-        userRole = 'ADMIN';
-        passwordValid = true;
+      } else if (password === 'password123') {
+        if (email === 'owner@saasify.in') {
+          userId = 'usr_demo_owner';
+          userDisplayName = 'Vikramaditya (Founder & CEO)';
+          userRole = 'OWNER';
+          merchantId = 'mer_saasify_blr';
+          merchantName = 'SaaSify Technologies India Pvt Ltd';
+          organizationSlug = 'saasify';
+          passwordValid = true;
+        } else if (email === 'merchant@saasify.in' || email === 'admin@saasify.in') {
+          userId = 'usr_demo_admin';
+          userDisplayName = 'Ujjwal (Admin)';
+          userRole = 'ADMIN';
+          merchantId = 'mer_saasify_blr';
+          merchantName = 'SaaSify Technologies India Pvt Ltd';
+          organizationSlug = 'saasify';
+          passwordValid = true;
+        } else if (email === 'ops@saasify.in') {
+          userId = 'usr_demo_ops';
+          userDisplayName = 'Rahul Nair (Operator)';
+          userRole = 'OPERATOR';
+          merchantId = 'mer_saasify_blr';
+          merchantName = 'SaaSify Technologies India Pvt Ltd';
+          organizationSlug = 'saasify';
+          passwordValid = true;
+        } else if (email === 'admin@quickcart.in') {
+          userId = 'usr_demo_quickcart';
+          userDisplayName = 'Aakash (QuickCart)';
+          userRole = 'ADMIN';
+          merchantId = 'mer_quickcart_mum';
+          merchantName = 'QuickCart Retail Pvt Ltd';
+          organizationSlug = 'quickcart';
+          passwordValid = true;
+        }
       }
     }
 

@@ -42,6 +42,8 @@ interface AppStateContextType {
   simulationResults: SimulatorResult[];
   experiments: RecoveryExperiment[];
   auditLogs: AuditLogEntry[];
+  currentUser: { id: string; email: string; name: string; role: 'OWNER' | 'ADMIN' | 'ANALYST' | 'OPERATOR' };
+  currentMerchant: { id: string; name: string };
   
   // Actions
   approveTransaction: (id: string, customAction?: RecoveryActionType) => Promise<void>;
@@ -53,6 +55,7 @@ interface AppStateContextType {
   simulateIncomingWebhook: (mockTxn?: Partial<Transaction>) => void;
   resetToDefaultData: () => void;
   refreshFromBackend: () => Promise<void>;
+  logout: () => Promise<void>;
 }
 
 const AppStateContext = createContext<AppStateContextType | undefined>(undefined);
@@ -61,6 +64,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [isDemoMode, setIsDemoMode] = useState<boolean>(true);
   const [geminiApiKey, setGeminiApiKey] = useState<string>('');
   const [razorpayKeyId, setRazorpayKeyId] = useState<string>('rzp_test_recoveriq_demo');
+
+  const [currentUser, setCurrentUser] = useState({
+    id: 'usr_demo_admin',
+    email: 'merchant@saasify.in',
+    name: 'Ujjwal (Admin)',
+    role: 'ADMIN' as 'OWNER' | 'ADMIN' | 'ANALYST' | 'OPERATOR',
+  });
+
+  const [currentMerchant, setCurrentMerchant] = useState({
+    id: 'mer_saasify_blr',
+    name: 'SaaSify India',
+  });
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [policies, setPolicies] = useState<PolicyGuardrails>(DEFAULT_POLICY_GUARDRAILS);
@@ -71,6 +86,28 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   // Function to sync live data from backend service layer
   const refreshFromBackend = async () => {
+    // 0. Fetch active user session
+    try {
+      const authRes = await fetch(`/api/auth/me?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+      });
+      if (authRes.ok) {
+        const aData = await authRes.json();
+        if (aData.authenticated && aData.user) {
+          setCurrentUser(aData.user);
+          if (aData.merchant?.name) {
+            setCurrentMerchant({
+              id: aData.merchant.id,
+              name: aData.merchant.name.includes('QuickCart') ? 'QuickCart Retail' : 'SaaSify India',
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[AppState] Failed to sync auth user:', err);
+    }
+
     // 1. Fetch live transactions independently with cache-busting
     try {
       const txnsRes = await fetch(`/api/transactions?_t=${Date.now()}`, {
@@ -549,6 +586,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setAuditLogs(INITIAL_AUDIT_LOGS);
   };
 
+  const logout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {}
+    window.location.href = '/login';
+  };
+
   return (
     <AppStateContext.Provider
       value={{
@@ -566,6 +610,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         simulationResults,
         experiments,
         auditLogs,
+        currentUser,
+        currentMerchant,
         approveTransaction,
         rejectTransaction,
         batchApproveTransactions,
@@ -575,6 +621,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         simulateIncomingWebhook,
         resetToDefaultData,
         refreshFromBackend,
+        logout,
       }}
     >
       {children}

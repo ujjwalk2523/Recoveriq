@@ -301,11 +301,11 @@ export function TransactionDrawer({ transaction, onClose }: TransactionDrawerPro
                       <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                         Customer 1-Tap Recovery Link
                         <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200 uppercase tracking-wider">
-                          Live Demo Ready
+                          Active Channel
                         </span>
                       </span>
                       <p className="text-[11px] text-slate-500">
-                        Share with customer or test payment recovery directly on your phone
+                        Direct self-serve checkout link for customer instant re-attempt
                       </p>
                     </div>
                   </div>
@@ -316,11 +316,11 @@ export function TransactionDrawer({ transaction, onClose }: TransactionDrawerPro
                     className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-md bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 transition-colors cursor-pointer shadow-2xs"
                   >
                     <QrCode className="w-3.5 h-3.5 text-slate-600" />
-                    <span>{showQrCode ? 'Hide QR' : 'Scan QR'}</span>
+                    <span>{showQrCode ? 'Hide QR' : 'QR Code'}</span>
                   </button>
                 </div>
 
-                {/* QR Code expansion for in-person judge testing */}
+                {/* QR Code expansion for mobile checkout */}
                 {showQrCode && (
                   <div className="p-3.5 bg-white rounded-xl border border-slate-200 flex flex-col sm:flex-row items-center gap-4 animate-in fade-in duration-150 shadow-xs">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -332,10 +332,10 @@ export function TransactionDrawer({ transaction, onClose }: TransactionDrawerPro
                     <div className="text-xs space-y-1 text-center sm:text-left">
                       <p className="font-semibold text-slate-900 flex items-center justify-center sm:justify-start gap-1">
                         <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                        Scan with Judge / Mobile Phone
+                        Scan to Pay / Mobile Checkout
                       </p>
                       <p className="text-slate-500 text-[11px] leading-relaxed">
-                        Open your phone camera to open the real Swiggy/CRED-style 1-tap checkout. Completing payment immediately marks this transaction as <strong className="text-emerald-700">RECOVERED</strong> on this dashboard in real-time!
+                        Scan with smartphone camera or UPI app to open the secure 1-tap checkout session. Completing payment immediately marks this transaction as <strong className="text-emerald-700">RECOVERED</strong>.
                       </p>
                     </div>
                   </div>
@@ -372,15 +372,15 @@ export function TransactionDrawer({ transaction, onClose }: TransactionDrawerPro
                   </button>
                 </div>
 
-                {/* Mobile Dispatch Section (Free WhatsApp wa.me & SMS) */}
+                {/* Mobile Dispatch Section */}
                 <div className="pt-2.5 border-t border-slate-200/80 space-y-2">
                   <div className="flex items-center justify-between">
                     <label className="text-[11px] font-medium text-slate-600 flex items-center gap-1">
                       <Phone className="w-3 h-3 text-slate-400" />
-                      Send directly to mobile number (Judge / Tester):
+                      Dispatch payment link to customer phone:
                     </label>
                     <span className="text-[10px] text-emerald-700 font-medium bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                      100% Free (wa.me & SMS)
+                      Direct WhatsApp / SMS
                     </span>
                   </div>
 
@@ -397,7 +397,7 @@ export function TransactionDrawer({ transaction, onClose }: TransactionDrawerPro
                       <button
                         type="button"
                         onClick={handleWhatsAppSend}
-                        title="Send via WhatsApp click-to-chat (Free)"
+                        title="Send via WhatsApp"
                         className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs transition-colors cursor-pointer"
                       >
                         <MessageSquare className="w-3.5 h-3.5" />
@@ -407,7 +407,7 @@ export function TransactionDrawer({ transaction, onClose }: TransactionDrawerPro
                       <button
                         type="button"
                         onClick={handleSmsSend}
-                        title="Send via phone SMS app (Free)"
+                        title="Send via SMS"
                         className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 shadow-2xs transition-colors cursor-pointer"
                       >
                         <Smartphone className="w-3.5 h-3.5" />
@@ -417,7 +417,7 @@ export function TransactionDrawer({ transaction, onClose }: TransactionDrawerPro
                       <button
                         type="button"
                         onClick={handleCopyText}
-                        title="Copy full recovery message"
+                        title="Copy recovery message"
                         className="p-2 text-xs rounded-lg bg-white hover:bg-slate-50 text-slate-500 border border-slate-200 transition-colors cursor-pointer"
                       >
                         {copiedText ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}

@@ -581,7 +581,7 @@ export default function TransactionsPage() {
                             href={`/pay/${txn.id}`}
                             target="_blank"
                             rel="noopener noreferrer"
-                            title="Open Customer Recovery Pay Page (Live Demo)"
+                            title="Open Customer Recovery Checkout"
                             className="p-1.5 rounded-md text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 transition-colors"
                           >
                             <ExternalLink className="w-3.5 h-3.5" />

@@ -81,6 +81,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         const tData = await txnsRes.json();
         if (tData.transactions && Array.isArray(tData.transactions) && tData.transactions.length > 0) {
           setTransactions(tData.transactions);
+          try {
+            localStorage.setItem('rcvq_transactions', JSON.stringify(tData.transactions));
+          } catch {}
         }
       }
 

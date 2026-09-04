@@ -15,6 +15,7 @@ import {
   X,
   CheckCheck,
   Eye,
+  RotateCw,
 } from 'lucide-react';
 
 export default function TransactionsPage() {
@@ -23,7 +24,21 @@ export default function TransactionsPage() {
     approveTransaction,
     batchApproveTransactions,
     simulateIncomingWebhook,
+    refreshFromBackend,
   } = useAppState();
+
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Automatically sync live transactions from Neon DB on page mount
+  useEffect(() => {
+    refreshFromBackend();
+  }, []);
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await refreshFromBackend();
+    setIsRefreshing(false);
+  };
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -193,14 +208,26 @@ export default function TransactionsPage() {
             )}
           </div>
 
-          <button
-            type="button"
-            onClick={exportCSV}
-            className="px-3 py-2 text-xs font-medium rounded-lg text-slate-700 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Export CSV</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="px-3 py-2 text-xs font-medium rounded-lg text-slate-700 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+            >
+              <RotateCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span>{isRefreshing ? 'Syncing...' : 'Sync Live'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={exportCSV}
+              className="px-3 py-2 text-xs font-medium rounded-lg text-slate-700 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Export CSV</span>
+            </button>
+          </div>
         </div>
 
         {/* Status Filter Tabs */}

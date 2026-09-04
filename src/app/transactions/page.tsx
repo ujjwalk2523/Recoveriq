@@ -16,6 +16,7 @@ import {
   CheckCheck,
   Eye,
   RotateCw,
+  ExternalLink,
 } from 'lucide-react';
 
 export default function TransactionsPage() {
@@ -574,23 +575,36 @@ export default function TransactionsPage() {
                       </td>
 
                       <td className="py-3.5 px-3 text-right" onClick={(e) => e.stopPropagation()}>
-                        {txn.status === 'NEEDS_APPROVAL' ? (
-                          <button
-                            type="button"
-                            onClick={() => approveTransaction(txn.id)}
-                            className="px-2.5 py-1 text-[11px] font-medium rounded-md bg-slate-900 hover:bg-slate-800 text-white transition-colors cursor-pointer"
+                        <div className="flex items-center justify-end gap-1.5">
+                          {/* Live 1-Tap Customer Recovery Pay Link */}
+                          <a
+                            href={`/pay/${txn.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open Customer Recovery Pay Page (Live Demo)"
+                            className="p-1.5 rounded-md text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 transition-colors"
                           >
-                            Approve
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setSelectedTxn(txn)}
-                            className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
-                        )}
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+
+                          {txn.status === 'NEEDS_APPROVAL' ? (
+                            <button
+                              type="button"
+                              onClick={() => approveTransaction(txn.id)}
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-md bg-slate-900 hover:bg-slate-800 text-white transition-colors cursor-pointer"
+                            >
+                              Approve
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedTxn(txn)}
+                              className="p-1.5 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );

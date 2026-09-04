@@ -1,29 +1,40 @@
-import { CustomerProfile, FailureCategory, PaymentMethod, RecoveryActionType, StrategyYield, Transaction } from './types';
-import { calculateExpectedRecoveryValue } from './ev-calculator';
+import { CustomerProfile, FailureCategory, PaymentMethod, RecoveryActionType, StrategyYield } from './types';
+import { FailureDiagnosis, diagnosePaymentFailure } from './classifier';
+import { RecoveryProbabilityService } from './probability-service';
+import { FatigueEngine } from './fatigue-engine';
+import { RiskEngine } from './risk-engine';
+import { calculateExpectedNetRecovery } from './ev-calculator';
 
 export interface StrategyRecommendationResult {
   recommendedAction: RecoveryActionType;
   actionConfidence: number;
-  expectedRecoveryValue: number;
+  expectedRecoveryValue: number; // Net Expected Recovery
   recoveryProbability: number;
   aiRationale: string;
   whyNotRationale?: string;
   strategyYields: StrategyYield[];
   isSuppressionRecommended: boolean;
+  expectedNetRecoveryBreakdown: {
+    grossPotential: number;
+    interventionCost: number;
+    fatiguePenalty: number;
+    riskPenalty: number;
+    netRecovery: number;
+  };
 }
 
-const STRATEGY_DEFINITIONS: {
+export const ALL_RECOVERY_STRATEGIES: {
   type: RecoveryActionType;
   title: string;
   timeHours: number;
   baseRisk: 'LOW' | 'MEDIUM' | 'HIGH';
 }[] = [
-  { type: 'IMMEDIATE_RETRY', title: 'Zero-Delay Gateway Retry', timeHours: 0.1, baseRisk: 'LOW' },
-  { type: 'OPTIMAL_DELAYED_RETRY', title: 'Optimal Window Delayed Retry (4-8h)', timeHours: 6.0, baseRisk: 'LOW' },
-  { type: 'WHATSAPP_NUDGE', title: 'Interactive WhatsApp 1-Tap Link', timeHours: 1.5, baseRisk: 'LOW' },
-  { type: 'PAYMENT_LINK', title: 'Multi-Rail SMS / Email Payment Link', timeHours: 3.0, baseRisk: 'MEDIUM' },
-  { type: 'MANDATE_UPDATE', title: 'Automated Mandate Update Routing', timeHours: 12.0, baseRisk: 'LOW' },
-  { type: 'HUMAN_ESCALATION', title: 'VIP Account Manager High-Touch Outreach', timeHours: 24.0, baseRisk: 'HIGH' },
+  { type: 'IMMEDIATE_RETRY', title: 'Immediate Switch Retry', timeHours: 0.1, baseRisk: 'LOW' },
+  { type: 'OPTIMAL_DELAYED_RETRY', title: 'Optimal Window Delayed Retry', timeHours: 4.0, baseRisk: 'LOW' },
+  { type: 'WHATSAPP_NUDGE', title: 'Interactive 1-Tap WhatsApp Nudge', timeHours: 1.0, baseRisk: 'LOW' },
+  { type: 'PAYMENT_LINK', title: 'Multi-Rail Dynamic Payment Link', timeHours: 2.5, baseRisk: 'MEDIUM' },
+  { type: 'MANDATE_UPDATE', title: 'Automated Mandate Update Workflow', timeHours: 12.0, baseRisk: 'LOW' },
+  { type: 'HUMAN_ESCALATION', title: 'Relationship Manager High-Touch Outreach', timeHours: 24.0, baseRisk: 'HIGH' },
   { type: 'DO_NOT_RECOVER', title: 'Intelligent Suppression (Do Not Recover)', timeHours: 0.0, baseRisk: 'LOW' },
 ];
 
@@ -32,21 +43,25 @@ export function evaluateRecoveryStrategies(
   failureCategory: FailureCategory,
   failureCode: string,
   paymentMethod: PaymentMethod,
-  customer: CustomerProfile
+  customer: CustomerProfile,
+  attemptNumber: number = 1,
+  hourOfDay: number = new Date().getHours()
 ): StrategyRecommendationResult {
-  // 1. Check for HARD SUPPRESSION ("Why NOT Recover?")
-  // Cases: Fraud, Card Stolen, Customer Max Fatigue, Churn Risk
-  if (failureCategory === 'RISK_AND_FRAUD' || failureCode === 'HIGH_RISK_SUSPECTED' || failureCode === 'CARD_REPORTED_LOST_STOLEN') {
-    const yields: StrategyYield[] = STRATEGY_DEFINITIONS.map(def => ({
+  // 1. Get structured failure diagnosis
+  const diagnosis = diagnosePaymentFailure(failureCode, paymentMethod);
+
+  // 2. Immediate Hard Suppression check (Fraud / Stolen / Zero Recoverability)
+  if (diagnosis.recoverability === 'ZERO' || failureCategory === 'RISK_AND_FRAUD') {
+    const suppressionYields: StrategyYield[] = ALL_RECOVERY_STRATEGIES.map(def => ({
       actionType: def.type,
       actionTitle: def.title,
-      successProbability: def.type === 'DO_NOT_RECOVER' ? 1.0 : 0.01,
+      successProbability: def.type === 'DO_NOT_RECOVER' ? 1.0 : 0.0,
       expectedValue: 0,
       interventionCost: 0,
       timeToRecoverHours: def.timeHours,
       riskLevel: def.type === 'DO_NOT_RECOVER' ? 'LOW' : 'HIGH',
       isRecommended: def.type === 'DO_NOT_RECOVER',
-      whyNotReason: def.type === 'DO_NOT_RECOVER' ? undefined : 'High risk of dispute/chargeback and issuer penalty.',
+      whyNotReason: def.type === 'DO_NOT_RECOVER' ? undefined : 'Prohibited: Issuer security flag or high dispute liability.',
     }));
 
     return {
@@ -54,112 +69,148 @@ export function evaluateRecoveryStrategies(
       actionConfidence: 99,
       expectedRecoveryValue: 0,
       recoveryProbability: 0.0,
-      aiRationale: 'Transaction was flagged by issuer security switch as potential card theft or dispute risk. Recovering this payment exposes the merchant to a ₹1,500 dispute penalty and gateway reputation degradation.',
-      whyNotRationale: 'Immediate suppression triggered. Card flagged for high fraud probability. Interventions would result in negative expected value due to 100% dispute probability.',
-      strategyYields: yields,
+      aiRationale: `Transaction suppressed. Flagged as ${diagnosis.standardCode}. Interventions prohibited to eliminate dispute chargebacks.`,
+      whyNotRationale: 'Immediate suppression: Fraud/Hotlisted card risk or zero recoverability.',
+      strategyYields: suppressionYields,
       isSuppressionRecommended: true,
+      expectedNetRecoveryBreakdown: {
+        grossPotential: 0,
+        interventionCost: 0,
+        fatiguePenalty: 0,
+        riskPenalty: amount,
+        netRecovery: 0,
+      },
     };
   }
 
-  if (customer.fatigueScore >= 85) {
-    const yields: StrategyYield[] = STRATEGY_DEFINITIONS.map(def => ({
-      actionType: def.type,
-      actionTitle: def.title,
-      successProbability: def.type === 'DO_NOT_RECOVER' ? 1.0 : 0.08,
-      expectedValue: 0,
-      interventionCost: 0,
-      timeToRecoverHours: def.timeHours,
-      riskLevel: 'HIGH',
-      isRecommended: def.type === 'DO_NOT_RECOVER',
-      whyNotReason: def.type === 'DO_NOT_RECOVER' ? undefined : 'Customer fatigue threshold (85+) reached. Additional nudges will trigger unsubscribes.',
-    }));
+  // 3. Multi-Strategy Scoring across all candidate actions
+  const evaluatedStrategies: {
+    actionType: RecoveryActionType;
+    actionTitle: string;
+    timeHours: number;
+    baseRisk: 'LOW' | 'MEDIUM' | 'HIGH';
+    probability: number;
+    confidence: number;
+    netEV: number;
+    grossPotential: number;
+    interventionCost: number;
+    fatiguePenalty: number;
+    riskPenalty: number;
+    isAvoided: boolean;
+    avoidReason?: string;
+  }[] = [];
 
-    return {
-      recommendedAction: 'DO_NOT_RECOVER',
-      actionConfidence: 94,
-      expectedRecoveryValue: 0,
-      recoveryProbability: 0.0,
-      aiRationale: `Customer ${customer.name} has experienced 4+ failed interactions this week (Fatigue Score: ${customer.fatigueScore}/100). Sending another automated nudge is projected to increase lifetime churn probability by 42%.`,
-      whyNotRationale: 'Customer relationship protection rule activated. Fatigue score exceeds safety threshold. Suppressing communication to preserve customer lifetime value (₹' + (customer.lifetimeValue || 15000).toLocaleString('en-IN') + ').',
-      strategyYields: yields,
-      isSuppressionRecommended: true,
-    };
-  }
+  for (const strategy of ALL_RECOVERY_STRATEGIES) {
+    // Prediction
+    const prediction = RecoveryProbabilityService.predict({
+      amount,
+      paymentMethod,
+      failureCategory,
+      failureCode,
+      severity: diagnosis.severity,
+      recoverability: diagnosis.recoverability,
+      actionType: strategy.type,
+      attemptNumber,
+      hourOfDay,
+      customerSegment: customer.segment,
+      customerRecoveryRate: customer.pastRecoveries > 0 ? 80 : 60,
+      customerFatigueScore: customer.fatigueScore,
+      customerRiskScore: customer.riskScore,
+    });
 
-  // 2. Compute EV across all actionable strategies
-  const yields: StrategyYield[] = STRATEGY_DEFINITIONS.filter(d => d.type !== 'DO_NOT_RECOVER').map(def => {
-    const ev = calculateExpectedRecoveryValue(amount, def.type, failureCategory, paymentMethod, customer);
-    
-    // Generate explanation for why or why not
-    let whyNot: string | undefined = undefined;
-    if (def.type === 'IMMEDIATE_RETRY' && (failureCategory === 'INSUFFICIENT_FUNDS' || failureCategory === 'AUTHENTICATION')) {
-      whyNot = 'Immediate retry has only 12% success on low funds/auth errors and exhausts retry quotas.';
-    } else if (def.type === 'HUMAN_ESCALATION' && amount < 15000) {
-      whyNot = `High intervention cost (₹30) exceeds reasonable unit economics for ticket size of ₹${amount.toLocaleString('en-IN')}.`;
-    } else if (def.type === 'MANDATE_UPDATE' && paymentMethod !== 'MANDATE') {
-      whyNot = 'Not applicable for non-mandate payment rails.';
+    // Fatigue analysis
+    const fatigue = FatigueEngine.evaluate({
+      currentFatigueScore: customer.fatigueScore,
+      actionType: strategy.type,
+      attemptNumber,
+      customerLTV: customer.lifetimeValue,
+    });
+
+    // Risk analysis
+    const risk = RiskEngine.evaluate({
+      amount,
+      failureCategory,
+      failureCode,
+      severity: diagnosis.severity,
+      customerRiskScore: customer.riskScore,
+      confidenceScore: prediction.confidenceScore,
+      actionType: strategy.type,
+    });
+
+    // Net Expected Recovery calculation
+    const ev = calculateExpectedNetRecovery({
+      amount,
+      probability: prediction.probability,
+      actionType: strategy.type,
+      fatiguePenaltyINR: fatigue.fatiguePenaltyINR,
+      riskPenaltyINR: risk.riskPenaltyINR,
+      confidenceScore: prediction.confidenceScore,
+    });
+
+    // Avoidance checks
+    const isExplicitlyAvoided = diagnosis.avoidChannels.includes(strategy.type);
+    const isFatigueBlocked = fatigue.shouldStopRecovery && strategy.type !== 'IMMEDIATE_RETRY' && strategy.type !== 'OPTIMAL_DELAYED_RETRY' && strategy.type !== 'DO_NOT_RECOVER';
+
+    let avoidReason: string | undefined;
+    if (isExplicitlyAvoided) {
+      avoidReason = `Channel discouraged for ${diagnosis.category}: ${diagnosis.reasoning}`;
+    } else if (isFatigueBlocked) {
+      avoidReason = fatigue.exhaustionReason;
     }
 
-    return {
-      actionType: def.type,
-      actionTitle: def.title,
-      successProbability: ev.successProbability,
-      expectedValue: ev.expectedValue,
+    evaluatedStrategies.push({
+      actionType: strategy.type,
+      actionTitle: strategy.title,
+      timeHours: strategy.timeHours,
+      baseRisk: strategy.baseRisk,
+      probability: prediction.probability,
+      confidence: prediction.confidenceScore,
+      netEV: isExplicitlyAvoided || isFatigueBlocked ? 0 : ev.netEV,
+      grossPotential: ev.grossPotential,
       interventionCost: ev.interventionCost,
-      timeToRecoverHours: def.timeHours,
-      riskLevel: def.baseRisk,
-      isRecommended: false,
-      whyNotReason: whyNot,
-    };
-  });
-
-  // 3. Select strategy with HIGHEST Positive Expected Value
-  let bestYield = yields[0];
-  for (const y of yields) {
-    if (y.expectedValue > bestYield.expectedValue) {
-      bestYield = y;
-    }
+      fatiguePenalty: fatigue.fatiguePenaltyINR,
+      riskPenalty: risk.riskPenaltyINR,
+      isAvoided: isExplicitlyAvoided || isFatigueBlocked,
+      avoidReason,
+    });
   }
 
-  // If even the best yield is negative or zero, fallback to DO_NOT_RECOVER
-  if (bestYield.expectedValue <= 0) {
-    return {
-      recommendedAction: 'DO_NOT_RECOVER',
-      actionConfidence: 88,
-      expectedRecoveryValue: 0,
-      recoveryProbability: 0.0,
-      aiRationale: 'All intervention channels yield negative Expected Recovery Value after factoring channel costs and customer friction.',
-      whyNotRationale: 'Intervention costs exceed gross recovery potential.',
-      strategyYields: yields,
-      isSuppressionRecommended: true,
-    };
-  }
+  // 4. Rank candidates by Net Expected Recovery (Descending)
+  const sorted = [...evaluatedStrategies].sort((a, b) => b.netEV - a.netEV);
+  const bestCandidate = sorted.find(s => !s.isAvoided && s.actionType !== 'DO_NOT_RECOVER') || sorted[0];
 
-  bestYield.isRecommended = true;
+  // 5. Construct StrategyYields table
+  const strategyYields: StrategyYield[] = evaluatedStrategies.map(s => ({
+    actionType: s.actionType,
+    actionTitle: s.actionTitle,
+    successProbability: s.probability,
+    expectedValue: s.netEV,
+    interventionCost: s.interventionCost,
+    timeToRecoverHours: s.timeHours,
+    riskLevel: s.baseRisk,
+    isRecommended: s.actionType === bestCandidate.actionType,
+    whyNotReason: s.avoidReason || (s.actionType !== bestCandidate.actionType
+      ? `Yields lower Net Expected Recovery (₹${s.netEV.toLocaleString('en-IN')} vs ₹${bestCandidate.netEV.toLocaleString('en-IN')}).`
+      : undefined),
+  }));
 
-  // 4. Generate contextual AI rationale
-  let rationale = '';
-  if (bestYield.actionType === 'WHATSAPP_NUDGE') {
-    rationale = `Detected ${failureCategory.replace(/_/g, ' ')} on ${paymentMethod}. WhatsApp 1-tap payment link yields highest recovery probability (${Math.round(bestYield.successProbability * 100)}%) with ₹${bestYield.expectedValue.toLocaleString('en-IN')} Expected Value at minimal friction.`;
-  } else if (bestYield.actionType === 'OPTIMAL_DELAYED_RETRY') {
-    rationale = `Failure caused by transient balance/network conditions. Scheduling delayed retry in optimal 4-6h window yields ${Math.round(bestYield.successProbability * 100)}% recovery without disturbing the customer.`;
-  } else if (bestYield.actionType === 'IMMEDIATE_RETRY') {
-    rationale = `Transient banking switch timeout confirmed. Zero-delay retry has ${Math.round(bestYield.successProbability * 100)}% success rate with zero customer friction and negligible cost (₹${bestYield.interventionCost}).`;
-  } else if (bestYield.actionType === 'PAYMENT_LINK') {
-    rationale = `Instrument invalid or expired. Generating multi-rail dynamic payment link enables customer to complete checkout using alternate UPI or Credit Card.`;
-  } else if (bestYield.actionType === 'MANDATE_UPDATE') {
-    rationale = `Auto-debit recurring mandate revoked. Initiating streamlined mandate re-registration flow preserves ongoing recurring billing cycle.`;
-  } else if (bestYield.actionType === 'HUMAN_ESCALATION') {
-    rationale = `High-ticket VIP transaction (₹${amount.toLocaleString('en-IN')}). Dedicated account manager escalation recommended for white-glove recovery.`;
-  }
+  const aiRationale = `Selected ${bestCandidate.actionTitle} maximizing Expected Net Recovery at ₹${bestCandidate.netEV.toLocaleString('en-IN')} (Probability: ${Math.round(bestCandidate.probability * 100)}%). ${diagnosis.reasoning}`;
 
   return {
-    recommendedAction: bestYield.actionType,
-    actionConfidence: Math.min(98, Math.max(72, Math.round(bestYield.successProbability * 100) + 10)),
-    expectedRecoveryValue: bestYield.expectedValue,
-    recoveryProbability: bestYield.successProbability,
-    aiRationale: rationale,
-    strategyYields: yields,
-    isSuppressionRecommended: false,
+    recommendedAction: bestCandidate.actionType,
+    actionConfidence: bestCandidate.confidence,
+    expectedRecoveryValue: bestCandidate.netEV,
+    recoveryProbability: bestCandidate.probability,
+    aiRationale,
+    whyNotRationale: bestCandidate.avoidReason,
+    strategyYields,
+    isSuppressionRecommended: bestCandidate.actionType === 'DO_NOT_RECOVER',
+    expectedNetRecoveryBreakdown: {
+      grossPotential: bestCandidate.grossPotential,
+      interventionCost: bestCandidate.interventionCost,
+      fatiguePenalty: bestCandidate.fatiguePenalty,
+      riskPenalty: bestCandidate.riskPenalty,
+      netRecovery: bestCandidate.netEV,
+    },
   };
 }

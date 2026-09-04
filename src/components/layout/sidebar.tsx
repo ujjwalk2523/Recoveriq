@@ -19,6 +19,8 @@ import {
   CheckCircle2,
   Home,
   Globe,
+  CreditCard,
+  Code,
 } from 'lucide-react';
 import { useAppState } from '@/lib/store/app-state-provider';
 
@@ -45,9 +47,13 @@ export function Sidebar() {
     { name: 'Recovery Simulator', href: '/simulator', icon: Sliders },
     { name: 'Experiment Lab', href: '/experiments', icon: FlaskConical },
     { name: 'Decision Trace', href: '/ai-decisions', icon: BrainCircuit },
+    { name: 'Recovery Intelligence', href: '/recovery-intelligence', icon: Sparkles },
     { name: 'Analytics', href: '/analytics', icon: BarChart3 },
     { name: 'Audit Log', href: '/audit-log', icon: ScrollText },
+    { name: 'Organization & Team', href: '/settings/organization', icon: Building },
     { name: 'Settings & Policy', href: '/settings', icon: Settings },
+    { name: 'Billing & Plans', href: '/settings/billing', icon: CreditCard },
+    { name: 'Developer API', href: '/settings/developer', icon: Code },
   ];
 
   return (

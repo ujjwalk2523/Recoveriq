@@ -6,8 +6,84 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// -----------------------------------------------------------------------------
+// Enums
+// -----------------------------------------------------------------------------
+
+enum Role {
+  OWNER
+  ADMIN
+  ANALYST
+  OPERATOR
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum MemberStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  REMOVED
+}
+
+enum TeamStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum UserAccountStatus {
+  ACTIVE
+  PENDING_VERIFICATION
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum MfaType {
+  TOTP
+}
+
+enum AuthMethod {
+  PASSWORD
+  MFA_TOTP
+  MFA_RECOVERY_CODE
+  SSO_OIDC
+  SSO_SAML
+}
+
+enum IdentityProviderType {
+  OIDC
+  SAML
+}
+
+enum IdpStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum DomainVerificationStatus {
+  PENDING
+  VERIFIED
+  REVOKED
+}
+
+enum DomainVerificationType {
+  DNS_TXT
+}
+
+enum AuthTokenType {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+  EMAIL_CHANGE
+  STEP_UP
 }
 
 enum PaymentMethod {
@@ -48,43 +124,462 @@ enum RecoveryActionType {
   DO_NOT_RECOVER
 }
 
+enum SubscriptionPlan {
+  STARTER
+  GROWTH
+  SCALE
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELED
+  CANCELLED
+  SUSPENDED
+  EXPIRED
+}
+
+enum AttemptStatus {
+  INITIATED
+  DISPATCHED
+  DELIVERED
+  CLICKED
+  PAID
+  FAILED
+  EXPIRED
+}
+
+enum ModelType {
+  CLASSIFICATION
+  RECOMMENDATION
+  MULTI_ARMED_BANDIT
+}
+
+enum UsageMetric {
+  TRANSACTIONS_PROCESSED
+  RECOVERY_ATTEMPTS
+  API_REQUESTS
+  PAYMENT_LINKS_CREATED
+  WHATSAPP_MESSAGES
+  RECOVERED_TRANSACTIONS
+  RECOVERED_REVENUE
+}
+
+// -----------------------------------------------------------------------------
+// Organization & Multi-Tenancy Core
+// -----------------------------------------------------------------------------
+
+model Organization {
+  id          String             @id @default(cuid())
+  name        String
+  slug        String             @unique
+  status      OrganizationStatus @default(ACTIVE)
+  createdBy   String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  members           OrganizationMember[]
+  invitations       OrganizationInvitation[]
+  teams             Team[]
+  merchants         Merchant[]
+  identityProviders OrganizationIdentityProvider[]
+  domains           OrganizationDomain[]
+  auditLogs         AuditLog[]
+  compliancePackages ComplianceEvidencePackage[]
+  governancePolicies GovernancePolicy[]
+
+  @@index([slug])
+  @@index([status])
+}
+
+model OrganizationMember {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  email          String
+  name           String?
+  role           Role         @default(OPERATOR)
+  status         MemberStatus @default(ACTIVE)
+  joinedAt       DateTime?
+  invitedAt      DateTime?
+  invitedBy      String?
+  lastActiveAt   DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  teamMemberships TeamMember[]
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@index([userId])
+  @@index([email])
+  @@index([status])
+}
+
+model OrganizationInvitation {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email          String
+  role           Role         @default(OPERATOR)
+  tokenHash      String       @unique
+  expiresAt      DateTime
+  invitedBy      String
+  acceptedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+  @@index([email])
+  @@index([tokenHash])
+  @@index([expiresAt])
+}
+
+model Team {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  slug           String
+  description    String?
+  status         TeamStatus   @default(ACTIVE)
+  createdBy      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  members        TeamMember[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+}
+
+model TeamMember {
+  id                   String             @id @default(cuid())
+  teamId               String
+  team                 Team               @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  organizationMemberId String
+  organizationMember   OrganizationMember @relation(fields: [organizationMemberId], references: [id], onDelete: Cascade)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@unique([teamId, organizationMemberId])
+  @@index([teamId])
+  @@index([organizationMemberId])
+}
+
 model Merchant {
-  id              String         @id @default(cuid())
+  id              String               @id @default(cuid())
+  organizationId  String?
+  organization    Organization?        @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   name            String
-  businessType    String
-  currency        String         @default("INR")
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  businessType    String               @default("SAAS") // SAAS, ECOMMERCE, EDTECH, FINTECH
+  currency        String               @default("INR")
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  // Tenant Relationships
+  users           MerchantUser[]
+  apiKeys         ApiKey[]
+  subscriptions   Subscription[]
+  usageRecords    UsageRecord[]
+  customers       Customer[]
   transactions    Transaction[]
   policies        PolicyGuardrails?
   experiments     RecoveryExperiment[]
+  auditLogs       AuditLog[]
+  webhookEvents   WebhookEvent[]
+  banditDecisions BanditDecision[]
+  recoveryIntelligence  MerchantRecoveryIntelligence?
+  learningEvents        RecoveryLearningEvent[]
+  intelligenceAnomalies RecoveryIntelligenceAnomaly[]
+  usageLedgerEntries    UsageLedgerEntry[]
+  apiRequestLogs        ApiRequestLog[]
+  apiIdempotencyRecords ApiIdempotencyRecord[]
+  webhookEndpoints      WebhookEndpoint[]
+  recoveriqEvents       RecoverIQEvent[]
+  webhookDeliveries     WebhookEventDelivery[]
+  invoices              Invoice[]
+
+  @@index([name])
+  @@index([organizationId])
 }
 
+model MerchantUser {
+  id            String    @id @default(cuid())
+  merchantId    String
+  merchant      Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  email         String    @unique
+  name          String
+  passwordHash  String
+  role          Role      @default(ADMIN)
+  avatarUrl     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([merchantId])
+  @@index([email])
+}
+
+enum ApiKeyEnvironment {
+  TEST
+  LIVE
+}
+
+model ApiKey {
+  id          String            @id @default(cuid())
+  merchantId  String
+  merchant    Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  name        String
+  prefix      String            // e.g. "rk_test_abc1" or "rk_live_def2"
+  secretHash  String            @unique
+  environment ApiKeyEnvironment @default(TEST)
+  scopes      Json              // string array of ApiScope
+  createdBy   String?
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  requestLogs        ApiRequestLog[]
+  idempotencyRecords ApiIdempotencyRecord[]
+
+  @@index([merchantId])
+  @@index([prefix])
+  @@index([environment])
+}
+
+model ApiRequestLog {
+  id             String            @id @default(cuid())
+  requestId      String            @unique
+  merchantId     String
+  merchant       Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  apiKeyId       String?
+  apiKey         ApiKey?           @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  environment    ApiKeyEnvironment @default(TEST)
+  method         String
+  path           String
+  scope          String?
+  statusCode     Int
+  latencyMs      Int
+  idempotencyKey String?
+  createdAt      DateTime          @default(now())
+
+  @@index([merchantId])
+  @@index([apiKeyId])
+  @@index([createdAt])
+  @@index([requestId])
+}
+
+model ApiIdempotencyRecord {
+  id             String            @id @default(cuid())
+  merchantId     String
+  merchant       Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  apiKeyId       String?
+  apiKey         ApiKey?           @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  idempotencyKey String
+  requestHash    String
+  status         String            // PROCESSING, COMPLETED
+  responseStatus Int
+  responseBody   Json
+  createdAt      DateTime          @default(now())
+  expiresAt      DateTime
+
+  @@unique([merchantId, idempotencyKey])
+  @@index([merchantId])
+  @@index([expiresAt])
+}
+
+model Plan {
+  id                       String         @id @default(cuid())
+  code                     String         @unique // STARTER, GROWTH, SCALE, ENTERPRISE
+  name                     String
+  description              String
+  monthlyPriceMinor        Int            // Minor units in paise (e.g. 799900 = ₹7,999.00), -1 for custom
+  currency                 String         @default("INR")
+  includedTransactions     Int            // Monthly limit (-1 for unlimited)
+  includedRecoveryAttempts Int            // Monthly limit (-1 for unlimited)
+  includedApiRequests      Int            // Monthly limit (-1 for unlimited)
+  features                 Json           // Record<string, boolean>
+  active                   Boolean        @default(true)
+  createdAt                DateTime       @default(now())
+  updatedAt                DateTime       @updatedAt
+
+  subscriptions            Subscription[]
+
+  @@index([code])
+}
+
+model Subscription {
+  id                     String             @id @default(cuid())
+  merchantId             String
+  merchant               Merchant           @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  planId                 String?
+  planDetails            Plan?              @relation(fields: [planId], references: [id])
+  plan                   SubscriptionPlan   @default(STARTER)
+  status                 SubscriptionStatus @default(TRIALING)
+  provider               String             @default("INTERNAL") // INTERNAL, RAZORPAY, STRIPE
+  providerCustomerId     String?
+  providerSubscriptionId String?
+  currentPeriodStart     DateTime
+  currentPeriodEnd       DateTime
+  trialStart             DateTime?
+  trialEnd               DateTime?
+  cancelAtPeriodEnd      Boolean            @default(false)
+  cancelledAt            DateTime?
+  suspendedAt            DateTime?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  events                 SubscriptionEvent[]
+  usageLedgerEntries     UsageLedgerEntry[]
+  invoices               Invoice[]
+
+  @@index([merchantId])
+  @@index([planId])
+  @@index([status])
+}
+
+model SubscriptionEvent {
+  id             String       @id @default(cuid())
+  subscriptionId String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  merchantId     String
+  eventType      String       // CREATED, TRIAL_STARTED, ACTIVATED, PLAN_CHANGED, PAST_DUE, CANCELLED, REACTIVATED, SUSPENDED, EXPIRED
+  previousPlan   String?
+  newPlan        String?
+  previousStatus String?
+  newStatus      String?
+  actor          String       @default("SYSTEM")
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+
+  @@index([subscriptionId])
+  @@index([merchantId])
+  @@index([createdAt])
+}
+
+model UsageLedgerEntry {
+  id               String       @id @default(cuid())
+  merchantId       String
+  merchant         Merchant     @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  subscriptionId   String?
+  subscription     Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  metric           UsageMetric
+  quantity         Int          // delta quantity, can be negative for corrections
+  unit             String       @default("COUNT") // COUNT, MINOR_UNIT
+  amountMinor      BigInt?      // integer minor units (paise) for RECOVERED_REVENUE
+  currency         String       @default("INR")
+  source           String       // TRANSACTION_INGEST, RECOVERY_EXECUTION, PAYMENT_CAPTURE, API_GATEWAY, MANUAL_CORRECTION
+  sourceId         String       // txn_123, att_456, req_789
+  idempotencyKey   String
+  periodStart      DateTime
+  periodEnd        DateTime
+  metadata         Json?
+  occurredAt       DateTime
+  createdAt        DateTime     @default(now())
+
+  // Compensating correction lineage
+  isCorrection     Boolean      @default(false)
+  originalEntryId  String?
+  correctionReason String?
+
+  @@unique([merchantId, idempotencyKey])
+  @@index([merchantId, metric, occurredAt])
+  @@index([merchantId, periodStart, periodEnd])
+  @@index([subscriptionId])
+  @@index([occurredAt])
+}
+
+model UsageRecord {
+  id                    String    @id @default(cuid())
+  merchantId            String
+  merchant              Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  month                 String    // Format "YYYY-MM"
+  recoveredAmountINR    Float     @default(0.0)
+  apiCallsCount         Int       @default(0)
+  recoveryAttemptsCount Int       @default(0)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([merchantId, month])
+  @@index([merchantId])
+}
+
+// -----------------------------------------------------------------------------
+// Customer & Recovery Intelligence Profile
+// -----------------------------------------------------------------------------
+
 model Customer {
-  id                String        @id @default(cuid())
+  id                String                   @id @default(cuid())
+  merchantId        String
+  merchant          Merchant                 @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  externalId        String?
   name              String
   email             String
   phone             String
-  segment           String        @default("CONSUMER") // VIP, ENTERPRISE, SMB, CONSUMER
-  lifetimeValue     Float         @default(0)
-  totalTransactions Int           @default(0)
-  pastRecoveries    Int           @default(0)
-  fatigueScore      Int           @default(0) // 0-100
-  riskScore         Int           @default(0) // 0-100
+  segment           String                   @default("CONSUMER") // VIP, ENTERPRISE, SMB, CONSUMER
+  lifetimeValue     Float                    @default(0.0)
+  totalTransactions Int                      @default(0)
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  recoveryProfile   CustomerRecoveryProfile?
+  transactions      Transaction[]
+
+  @@index([merchantId])
+  @@index([email])
+  @@index([phone])
+}
+
+model CustomerRecoveryProfile {
+  id                String    @id @default(cuid())
+  customerId        String    @unique
+  customer          Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  pastRecoveries    Int       @default(0)
+  fatigueScore      Int       @default(0) // 0-100
+  riskScore         Int       @default(0) // 0-100
   upiVpa            String?
   cardLast4         String?
+  cardBrand         String?
   bankName          String?
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
-  transactions      Transaction[]
+  preferredChannel        String    @default("WHATSAPP")
+  
+  // Phase 6.8 Behavioral Intelligence Memory
+  totalFailedPayments     Int       @default(0)
+  totalRecoveredPayments  Int       @default(0)
+  totalRecoveryAttempts   Int       @default(0)
+  recoveryRate            Float     @default(0.0)
+  avgRecoveryDelayMinutes Float     @default(0.0)
+  lastSuccessfulStrategy  String?
+  lastSuccessfulDelayMinutes Float?
+  upiRecoveryRate         Float     @default(0.5)
+  cardRecoveryRate        Float     @default(0.5)
+  linkConversionRate      Float     @default(0.5)
+  whatsappConversionRate  Float     @default(0.5)
+  retryConversionRate     Float     @default(0.5)
+  behavioralSegment       String    @default("NEW_CUSTOMER")
+  strategySuccessCounts   Json?
+  strategyFailureCounts   Json?
+  evidenceLevel           String    @default("LOW") // LOW, MEDIUM, HIGH
+  lastRecoveryAt          DateTime?
+
+  updatedAt               DateTime  @updatedAt
 }
+
+// -----------------------------------------------------------------------------
+// Transaction, Payments & Decoupled Recovery History
+// -----------------------------------------------------------------------------
 
 model Transaction {
   id                    String             @id @default(cuid())
   merchantId            String
-  merchant              Merchant           @relation(fields: [merchantId], references: [id])
+  merchant              Merchant           @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   customerId            String
-  customer              Customer           @relation(fields: [customerId], references: [id])
+  customer              Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
   orderId               String
   paymentId             String?
   amount                Float
@@ -95,48 +590,134 @@ model Transaction {
   failureMessage        String
   failureCategory       FailureCategory
   rawGatewayResponse    Json?
-  
-  // AI & Recovery Metrics
+
+  // AI & Recommendation Metrics
   recoveryProbability   Float              @default(0.5)
   expectedRecoveryValue Float              @default(0.0)
   recommendedAction     RecoveryActionType
   actionConfidence      Int                @default(80)
   aiRationale           String
   whyNotRationale       String?
-  
-  // Policy & Approval
+
+  // Policy & Approval State
   requiresApproval      Boolean            @default(false)
   approvalReason        String?
   approvedBy            String?
   approvedAt            DateTime?
-  
-  // Execution
+
+  // High-level execution snapshot
   executionChannel      String?
   executionStatus       String?
   recoveredAt           DateTime?
   recoveredAmount       Float?
-  
+  dataSource            String             @default("RAZORPAY_TEST") // SYNTHETIC, RAZORPAY_TEST, RAZORPAY_LIVE
+
   createdAt             DateTime           @default(now())
   updatedAt             DateTime           @updatedAt
+
+  // Decoupled sub-models: Crucial for ML learning from multi-attempt histories
+  paymentEvents         PaymentEvent[]
+  decisions             Decision[]
+  recoveryAttempts      RecoveryAttempt[]
+  banditDecisions       BanditDecision[]
+
+  @@index([merchantId])
+  @@index([customerId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model PaymentEvent {
+  id                 String       @id @default(cuid())
+  transactionId      String
+  transaction        Transaction  @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  eventType          String       // PAYMENT_FAILED, PAYMENT_AUTHORIZED, PAYMENT_CAPTURED, REFUNDED
+  amount             Float
+  status             String
+  gatewayErrorCode   String?
+  gatewayErrorMessage String?
+  rawPayload         Json?
+  createdAt          DateTime     @default(now())
+
+  @@index([transactionId])
+}
+
+model Decision {
+  id                    String             @id @default(cuid())
+  transactionId         String
+  transaction           Transaction        @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  recommendedAction     RecoveryActionType
+  confidenceScore       Int
+  recoveryProbability   Float
+  expectedRecoveryValue Float
+  modelId               String?
+  rationale             String
+  status                String             @default("PENDING") // PENDING, APPROVED, REJECTED, EXECUTED
+  createdAt             DateTime           @default(now())
+
   decisionTraces        DecisionTrace[]
+
+  @@index([transactionId])
 }
 
 model DecisionTrace {
-  id            String       @id @default(cuid())
-  transactionId String
-  transaction   Transaction  @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  id            String    @id @default(cuid())
+  decisionId    String
+  decision      Decision  @relation(fields: [decisionId], references: [id], onDelete: Cascade)
   step          Int
-  name          String
-  status        String
+  name          String    // DETECT, DIAGNOSE, PREDICT, SIMULATE, OPTIMIZE, APPROVE, EXECUTE, MEASURE
+  status        String    // COMPLETED, IN_PROGRESS, AWAITING_APPROVAL, SKIPPED, FAILED
   summary       String
   details       Json?
-  timestamp     DateTime     @default(now())
+  timestamp     DateTime  @default(now())
+
+  @@index([decisionId])
 }
+
+model RecoveryAttempt {
+  id                String             @id @default(cuid())
+  transactionId     String
+  transaction       Transaction        @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  sequenceId        String?
+  stepId            Int?
+  attemptNumber     Int                @default(1)
+  actionType        RecoveryActionType
+  channel           String             // WHATSAPP, SMS, GATEWAY_RETRY, PAYMENT_LINK, EMAIL
+  status            AttemptStatus      @default(INITIATED)
+  provider          String?            @default("RAZORPAY") // RAZORPAY, WHATSAPP_META, CASHFREE, TWILIO
+  providerReference String?            // Gateway payment ID or link ID or WhatsApp message ID
+  idempotencyKey    String?            @unique
+  scheduledAt       DateTime?
+  dispatchedAt      DateTime           @default(now())
+  executedAt        DateTime?
+  completedAt       DateTime?
+  recoveredAmount   Float?
+  cost              Float?             @default(0.0)
+  outcome           String?            // SUCCESS, RECOVERED, FAILED, TIMED_OUT, NOT_OPENED
+  gatewayPaymentId  String?
+  errorMessage      String?
+  metadata          Json?
+  banditDecisionId  String?
+  banditDecision    BanditDecision?    @relation(fields: [banditDecisionId], references: [id], onDelete: SetNull)
+  banditAction      String?
+  banditModelVersion String?
+  createdAt         DateTime           @default(now())
+
+  @@index([transactionId])
+  @@index([status])
+  @@index([sequenceId])
+  @@index([idempotencyKey])
+  @@index([banditDecisionId])
+}
+
+// -----------------------------------------------------------------------------
+// Policies, Experiments & Platform Governance
+// -----------------------------------------------------------------------------
 
 model PolicyGuardrails {
   id                          String    @id @default(cuid())
   merchantId                  String    @unique
-  merchant                    Merchant  @relation(fields: [merchantId], references: [id])
+  merchant                    Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   autoApproveMaxAmount        Float     @default(15000)
   minConfidenceForAutoApprove Int       @default(80)
   maxCustomerFatigueThreshold Int       @default(70)
@@ -153,26 +734,705 @@ model PolicyGuardrails {
 model RecoveryExperiment {
   id             String    @id @default(cuid())
   merchantId     String
-  merchant       Merchant  @relation(fields: [merchantId], references: [id])
+  merchant       Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   title          String
   hypothesis     String
-  status         String    @default("RUNNING")
+  status         String    @default("RUNNING") // RUNNING, CONCLUDED, DRAFT
   totalTraffic   Int       @default(0)
   startDate      DateTime  @default(now())
   endDate        DateTime?
   controlArm     Json
   variantArms    Json
   insights       String[]
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([merchantId])
+}
+
+model WebhookEvent {
+  id            String    @id @default(cuid())
+  eventId       String?   @unique // Gateway unique event_id for idempotency
+  merchantId    String?
+  merchant      Merchant? @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  source        String    // RAZORPAY, STRIPE, CASHFREE, PAYU
+  eventType     String
+  payload       Json
+  processed     Boolean   @default(false)
+  processedAt   DateTime?
+  errorMessage  String?
+  createdAt     DateTime  @default(now())
+
+  @@index([merchantId])
+  @@index([source, eventType])
 }
 
 model AuditLog {
-  id             String    @id @default(cuid())
-  actorType      String
-  actorName      String
-  action         String
-  entityType     String
-  entityId       String
-  details        String
-  integrityHash  String
-  timestamp      DateTime  @default(now())
+  id                String        @id @default(cuid())
+  organizationId    String?
+  organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  merchantId        String?
+  merchant          Merchant?     @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  actorType         String        // USER, API_KEY, SYSTEM, WORKER, WEBHOOK, SERVICE, ANONYMOUS
+  actorName         String
+  actorId           String?
+  actorDisplayName  String?
+  actorEmail        String?
+  action            String        // Stable machine-readable action
+  category          String        @default("SYSTEM") // AUTHENTICATION, AUTHORIZATION, IDENTITY, MFA, SESSION, ORGANIZATION, etc
+  severity          String        @default("INFO")   // INFO, LOW, MEDIUM, HIGH, CRITICAL
+  result            String        @default("SUCCESS") // SUCCESS, FAILURE, DENIED, PARTIAL
+  entityType        String        // TRANSACTION, POLICY, EXPERIMENT, MERCHANT, etc (legacy/resourceType synonym)
+  entityId          String        // resourceId synonym
+  resourceType      String?
+  resourceId        String?
+  details           String        @default("")
+  requestId         String?
+  sessionId         String?
+  ipHash            String?
+  userAgentSummary  String?
+  metadata          String?       // JSON string
+  previousState     String?       // JSON string
+  newState          String?       // JSON string
+  sequenceNumber    Int?
+  eventHash         String?
+  previousEventHash String?
+  schemaVersion     Int           @default(1)
+  integrityHash     String        @default("")
+  occurredAt        DateTime      @default(now())
+  timestamp         DateTime      @default(now())
+  createdAt         DateTime      @default(now())
+
+  @@index([organizationId, sequenceNumber])
+  @@index([organizationId, occurredAt])
+  @@index([organizationId, action])
+  @@index([organizationId, category])
+  @@index([organizationId, actorId])
+  @@index([organizationId, resourceType, resourceId])
+  @@index([organizationId, merchantId])
+  @@index([merchantId])
+  @@index([entityId])
+}
+
+model AIModelVersion {
+  id          String     @id @default(cuid())
+  name        String
+  version     String     @unique // e.g. "RecoverIQ-Bandit-v2.4"
+  modelType   ModelType
+  accuracy    Float
+  isActive    Boolean    @default(true)
+  description String?
+  createdAt   DateTime   @default(now())
+}
+
+model BanditDecision {
+  id                     String      @id @default(cuid())
+  merchantId             String
+  merchant               Merchant    @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  transactionId          String
+  transaction            Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  contextSnapshot        Json
+  candidateActions       String[]
+  selectedAction         String
+  selectionMode          String      // EXPLOIT or EXPLORE
+  actionScores           Json
+  expectedReward         Float
+  explorationProbability Float
+  actualReward           Float?
+  outcome                String?
+  recoveredAmount        Float?
+  modelVersion           String            @default("bandit-v1.0")
+  algorithm              String            @default("CONTEXTUAL_THOMPSON_SAMPLING")
+  policyDecision         String?
+  policyReason           String?
+  dataSource             String            @default("RAZORPAY_TEST") // SYNTHETIC, RAZORPAY_TEST, RAZORPAY_LIVE
+  createdAt              DateTime          @default(now())
+  resolvedAt             DateTime?
+
+  recoveryAttempts       RecoveryAttempt[]
+
+  @@index([merchantId])
+  @@index([transactionId])
+  @@index([selectedAction])
+}
+
+// -----------------------------------------------------------------------------
+// Phase 6.8 Self-Improving Recovery Intelligence Memory
+// -----------------------------------------------------------------------------
+
+model MerchantRecoveryIntelligence {
+  id                          String    @id @default(cuid())
+  merchantId                  String    @unique
+  merchant                    Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  totalFailedPayments         Int       @default(0)
+  totalRecoveredPayments      Int       @default(0)
+  recoveryRate                Float     @default(0.0)
+  totalRecoveryRevenue        Float     @default(0.0)
+  totalRecoveryCost           Float     @default(0.0)
+  totalNetRecoveryRevenue     Float     @default(0.0)
+  averageReward               Float     @default(0.0)
+  bestStrategy                String?
+  bestTimingBucket            String?
+  strategyPerformance         Json?
+  timingPerformance           Json?
+  failureCategoryPerformance  Json?
+  paymentMethodPerformance    Json?
+  amountBandPerformance       Json?
+  customerSegmentPerformance  Json?
+  intelligenceQuality         Float     @default(50.0) // 0-100
+  evidenceLevel               String    @default("LOW") // LOW, MEDIUM, HIGH
+  coldStart                   Boolean   @default(true)
+  coldStartReason             String?   @default("Insufficient historical recovery observations (<30 samples).")
+  modelVersion                String    @default("RecoverIQ-Intelligence-v1.0")
+  lastUpdatedAt               DateTime  @default(now())
+
+  @@index([merchantId])
+}
+
+model RecoveryLearningEvent {
+  id                    String    @id // Composite idempotency key: learn_{merchantId}_{transactionId}_{outcome}
+  merchantId            String
+  merchant              Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  transactionId         String
+  customerId            String?
+  banditDecisionId      String?
+  strategy              String
+  timingBucket          String?
+  paymentMethod         String
+  failureCategory       String
+  amount                Float
+  recoveredAmount       Float     @default(0.0)
+  recoveryCost          Float     @default(0.0)
+  fatiguePenalty        Float     @default(0.0)
+  riskPenalty           Float     @default(0.0)
+  reward                Float     @default(0.0)
+  outcome               String    // RECOVERY_SUCCEEDED, RECOVERY_FAILED, RECOVERY_EXPIRED, RECOVERY_SUPPRESSED, etc.
+  recoveryDelayMinutes  Float?
+  dataSource            String    @default("RAZORPAY_TEST") // SYNTHETIC, RAZORPAY_TEST, RAZORPAY_LIVE
+  modelVersion          String    @default("RecoverIQ-Intelligence-v1.0")
+  status                String    @default("COMPLETED") // PENDING, PROCESSING, COMPLETED, FAILED
+  createdAt             DateTime  @default(now())
+
+  @@index([merchantId])
+  @@index([transactionId])
+  @@index([customerId])
+  @@index([strategy])
+  @@index([outcome])
+  @@index([createdAt])
+}
+
+model RecoveryIntelligenceAnomaly {
+  id                    String    @id @default(cuid())
+  merchantId            String
+  merchant              Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  anomalyType           String    // RATE_DROP, COST_SPIKE, NEGATIVE_SURPLUS, DRIFT
+  severity              String    // INFO, WARNING, CRITICAL
+  metric                String
+  previousValue         Float
+  currentValue          Float
+  explanation           String
+  status                String    @default("ACTIVE") // ACTIVE, RESOLVED, ACKNOWLEDGED
+  detectedAt            DateTime  @default(now())
+
+  @@index([merchantId])
+  @@index([severity])
+  @@index([status])
+  @@index([detectedAt])
+}
+
+// -----------------------------------------------------------------------------
+// Phase 7.4 Developer Webhooks & Event Delivery Infrastructure
+// -----------------------------------------------------------------------------
+
+enum WebhookEndpointStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  DELIVERING
+  DELIVERED
+  RETRYING
+  FAILED
+  DEAD_LETTER
+  CANCELLED
+}
+
+model WebhookEndpoint {
+  id               String                @id @default(cuid())
+  merchantId       String
+  merchant         Merchant              @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  url              String
+  description      String?
+  secretHash       String                // SHA-256 hash of whsec_...
+  subscribedEvents Json                  // string[] of domain event types
+  status           WebhookEndpointStatus @default(ACTIVE)
+  createdBy        String?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  lastDeliveryAt   DateTime?
+
+  deliveries       WebhookEventDelivery[]
+
+  @@index([merchantId])
+  @@index([merchantId, status])
+}
+
+model RecoverIQEvent {
+  id            String   @id @default(cuid())
+  merchantId    String
+  merchant      Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  type          String   // e.g. payment.failed, recovery.completed
+  version       Int      @default(1)
+  aggregateType String   // payment, recovery, intelligence, system
+  aggregateId   String   // txn_123, seq_456, etc.
+  payload       Json
+  createdAt     DateTime @default(now())
+
+  deliveries    WebhookEventDelivery[]
+
+  @@index([merchantId])
+  @@index([merchantId, type])
+  @@index([merchantId, createdAt])
+  @@index([aggregateType, aggregateId])
+}
+
+model WebhookEventDelivery {
+  id             String                @id @default(cuid())
+  merchantId     String
+  merchant       Merchant              @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  endpointId     String
+  endpoint       WebhookEndpoint       @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  eventId        String
+  event          RecoverIQEvent        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventType      String
+  payload        Json
+  status         WebhookDeliveryStatus @default(PENDING)
+  attemptCount   Int                   @default(0)
+  responseStatus Int?
+  responseBody   String?
+  latencyMs      Int?
+  nextRetryAt    DateTime?
+  deliveredAt    DateTime?
+  lastAttemptAt  DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  @@unique([merchantId, endpointId, eventId])
+  @@index([merchantId])
+  @@index([endpointId])
+  @@index([eventId])
+  @@index([status])
+  @@index([nextRetryAt])
+  @@index([createdAt])
+}
+
+// -----------------------------------------------------------------------------
+// Phase 7.5 Production SaaS Billing & Immutable Invoice Ledger
+// -----------------------------------------------------------------------------
+
+enum InvoiceStatus {
+  DRAFT
+  OPEN
+  PAID
+  PAST_DUE
+  VOID
+  UNCOLLECTIBLE
+}
+
+enum InvoiceLineItemType {
+  BASE_SUBSCRIPTION
+  OVERAGE
+  ADD_ON
+  CREDIT
+  DISCOUNT
+  TAX
+}
+
+model Invoice {
+  id                String            @id @default(cuid())
+  merchantId        String
+  merchant          Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  subscriptionId    String?
+  subscription      Subscription?     @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  providerInvoiceId String?
+  invoiceNumber     String            @unique // e.g. "INV-2026-0001"
+  status            InvoiceStatus     @default(OPEN)
+  currency          String            @default("INR")
+  subtotalMinor     Int               // Base amount in paise
+  taxMinor          Int               @default(0) // Integer minor units (0 if tax not yet integrated)
+  discountMinor     Int               @default(0)
+  overageMinor      Int               @default(0)
+  totalMinor        Int               // subtotal + overage + tax - discount
+  amountPaidMinor   Int               @default(0)
+  amountDueMinor    Int               @default(0)
+  periodStart       DateTime
+  periodEnd         DateTime
+  issuedAt          DateTime          @default(now())
+  dueAt             DateTime?
+  paidAt            DateTime?
+  isTestMode        Boolean           @default(true)
+  metadata          Json?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  lineItems         InvoiceLineItem[]
+
+  @@unique([merchantId, periodStart, periodEnd, invoiceNumber])
+  @@index([merchantId])
+  @@index([subscriptionId])
+  @@index([status])
+  @@index([periodStart, periodEnd])
+  @@index([createdAt])
+}
+
+model InvoiceLineItem {
+  id             String              @id @default(cuid())
+  invoiceId      String
+  invoice        Invoice             @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  type           InvoiceLineItemType @default(BASE_SUBSCRIPTION)
+  description    String
+  quantity       Int                 @default(1)
+  unitPriceMinor Int                 // Minor unit price in paise
+  totalMinor     Int                 // quantity * unitPriceMinor
+  metric         String?             // e.g. TRANSACTIONS_PROCESSED, RECOVERY_ATTEMPTS
+  usageMeasured  Int?
+  usageIncluded  Int?
+  metadata       Json?
+  createdAt      DateTime            @default(now())
+
+  @@index([invoiceId])
+}
+
+// -----------------------------------------------------------------------------
+// Phase 8.6 Enterprise Identity & Authentication Models
+// -----------------------------------------------------------------------------
+
+model User {
+  id                 String                  @id @default(cuid())
+  email              String                  @unique
+  emailNormalized    String                  @unique
+  emailVerifiedAt    DateTime?
+  displayName        String?
+  avatarUrl          String?
+  status             UserAccountStatus       @default(ACTIVE)
+  lastLoginAt        DateTime?
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  credentials        UserCredential[]
+  mfa                UserMfa?
+  sessions           UserSession[]
+  externalIdentities UserExternalIdentity[]
+  verificationTokens AuthVerificationToken[]
+
+  @@index([emailNormalized])
+  @@index([status])
+}
+
+model UserCredential {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  passwordHash String
+  algorithm    String   @default("bcrypt")
+  salt         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model UserMfa {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mfaType            MfaType  @default(TOTP)
+  encryptedSecret    String   // AES-256-GCM encrypted
+  secretIv           String
+  secretTag          String
+  verifiedAt         DateTime?
+  recoveryCodeHashes Json     // Array of SHA-256 hashed single-use recovery codes
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model UserSession {
+  id               String      @id @default(cuid())
+  userId           String
+  user             User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash        String      @unique
+  ipHash           String?
+  userAgentSummary String?
+  organizationId   String?
+  authMethod       AuthMethod  @default(PASSWORD)
+  lastActiveAt     DateTime    @default(now())
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime    @default(now())
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+  @@index([revokedAt])
+}
+
+model UserExternalIdentity {
+  id             String               @id @default(cuid())
+  userId         String
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider       IdentityProviderType
+  providerUserId String
+  email          String?
+  metadata       Json?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
+  @@index([email])
+}
+
+model OrganizationIdentityProvider {
+  id                    String               @id @default(cuid())
+  organizationId        String
+  organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  providerType          IdentityProviderType @default(OIDC)
+  status                IdpStatus            @default(ACTIVE)
+  issuer                String
+  clientId              String
+  encryptedClientSecret String?              // AES-256-GCM encrypted
+  clientSecretIv        String?
+  clientSecretTag       String?
+  authorizationEndpoint String?
+  tokenEndpoint         String?
+  userinfoEndpoint      String?
+  jwksUri               String?
+  metadata              Json?
+  allowedDomains        Json?                // Array of strings e.g. ["acme.com"]
+  enforceSso            Boolean              @default(false)
+  jitEnabled            Boolean              @default(false)
+  defaultRole           Role                 @default(OPERATOR)
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+
+  @@index([organizationId])
+  @@index([issuer])
+}
+
+model OrganizationDomain {
+  id                    String                   @id @default(cuid())
+  organizationId        String
+  organization          Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  domain                String
+  verificationTokenHash String
+  verificationType      DomainVerificationType   @default(DNS_TXT)
+  status                DomainVerificationStatus @default(PENDING)
+  verifiedAt            DateTime?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+
+  @@unique([organizationId, domain])
+  @@index([organizationId])
+  @@index([domain])
+  @@index([status])
+}
+
+model AuthVerificationToken {
+  id        String        @id @default(cuid())
+  tokenHash String        @unique
+  type      AuthTokenType
+  userId    String?
+  user      User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email     String
+  metadata  Json?
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime      @default(now())
+
+  @@index([tokenHash])
+  @@index([userId])
+  @@index([email])
+  @@index([type])
+  @@index([expiresAt])
+}
+
+// -----------------------------------------------------------------------------
+// Phase 8.7.3 — Enterprise Compliance Evidence
+// -----------------------------------------------------------------------------
+
+model ComplianceEvidencePackage {
+  id                 String                   @id @default(cuid())
+  organizationId     String
+  organization       Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  packageType        String
+  controlId          String
+  title              String
+  description        String
+  periodStart        DateTime
+  periodEnd          DateTime
+  status             String                   @default("READY") // DRAFT, GENERATING, READY, INTEGRITY_FAILED, FAILED
+  auditChainStatus   String                   @default("NOT_APPLICABLE") // VERIFIED, TAMPER_DETECTED, NOT_APPLICABLE
+  checkedAuditEvents Int                      @default(0)
+  totalItems         Int                      @default(0)
+  sourceCounts       Json
+  packageHash        String
+  manifest           Json
+  generatedBy        String
+  generatorVersion   String                   @default("RecoverIQ-Evidence-v1.0")
+  schemaVersion      Int                      @default(1)
+  generatedAt        DateTime                 @default(now())
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  items              ComplianceEvidenceItem[]
+
+  @@index([organizationId, packageType])
+  @@index([organizationId, controlId])
+  @@index([organizationId, generatedAt])
+}
+
+model ComplianceEvidenceItem {
+  id           String                    @id @default(cuid())
+  packageId    String
+  package      ComplianceEvidencePackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  evidenceType String
+  sourceType   String
+  sourceId     String
+  description  String
+  occurredAt   DateTime
+  metadata     Json
+  evidenceHash String
+  sequence     Int                       @default(1)
+  createdAt    DateTime                  @default(now())
+
+  @@index([packageId, sequence])
+  @@index([sourceType, sourceId])
+}
+
+// -----------------------------------------------------------------------------
+// Phase 8.7.4 — Enterprise Governance Policies
+// -----------------------------------------------------------------------------
+
+model GovernancePolicy {
+  id             String                    @id @default(cuid())
+  organizationId String
+  organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  description    String
+  category       String
+  status         String                    @default("ACTIVE") // DRAFT, ACTIVE, PAUSED, ARCHIVED
+  priority       Int                       @default(100)
+  effect         String                    // ALLOW, DENY, REQUIRE_APPROVAL, REQUIRE_STEP_UP
+  conditions     Json
+  version        Int                       @default(1)
+  createdBy      String
+  updatedBy      String
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+
+  history        GovernancePolicyHistory[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, category])
+  @@index([organizationId, priority])
+}
+
+model GovernancePolicyHistory {
+  id           String           @id @default(cuid())
+  policyId     String
+  policy       GovernancePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  version      Int
+  name         String
+  description  String
+  category     String
+  status       String
+  priority     Int
+  effect       String
+  conditions   Json
+  changedBy    String
+  changeReason String?
+  createdAt    DateTime         @default(now())
+
+  @@index([policyId, version])
+}
+
+// -----------------------------------------------------------------------------
+// Phase 8.8 — Disaster Recovery & Reliability Engineering
+// -----------------------------------------------------------------------------
+
+model BackupMetadata {
+  id                 String    @id @default(cuid())
+  backupId           String    @unique
+  databaseIdentifier String
+  backupType         String    // FULL, INCREMENTAL, LOG, DIFFERENTIAL
+  startedAt          DateTime
+  completedAt        DateTime?
+  sizeBytes          BigInt    @default(0)
+  checksum           String    // SHA-256
+  status             String    // STARTED, COMPLETED, FAILED, VERIFIED, CORRUPT, EXPIRED
+  retentionClass     String    @default("STANDARD_30D")
+  verifiedAt         DateTime?
+  sourceEnvironment  String    @default("production")
+  createdAt          DateTime  @default(now())
+
+  restoreVerifications RestoreVerificationRecord[]
+
+  @@index([databaseIdentifier, status])
+  @@index([status, completedAt])
+  @@index([startedAt])
+}
+
+model RestoreVerificationRecord {
+  id                String          @id @default(cuid())
+  backupId          String
+  backup            BackupMetadata  @relation(fields: [backupId], references: [backupId], onDelete: Cascade)
+  environment       String          @default("isolated_verification")
+  status            String          // VERIFIED, FAILED, RUNNING
+  durationMs        Int             @default(0)
+  checksPassCount   Int             @default(0)
+  checksTotalCount  Int             @default(0)
+  details           Json
+  verifiedAt        DateTime        @default(now())
+  createdAt         DateTime        @default(now())
+
+  @@index([backupId, status])
+  @@index([verifiedAt])
+}
+
+model WebhookReconciliationRecord {
+  id                String    @id @default(cuid())
+  merchantId        String
+  providerReference String
+  expectedEvent     String
+  observedEvent     String?
+  lastCheckedAt     DateTime  @default(now())
+  status            String    // MATCHED, PENDING, MISSING, CONFLICT, RESOLVED, MANUAL_REVIEW
+  attemptCount      Int       @default(1)
+  resolutionNotes   String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([merchantId, status])
+  @@index([providerReference])
+  @@index([status, lastCheckedAt])
+}
+
+model PaymentReconciliationRecord {
+  id                     String    @id @default(cuid())
+  merchantId             String
+  transactionId          String
+  providerReference      String?
+  providerStatus         String?
+  localStatus            String
+  reconciliationOutcome  String    // CONFIRMED_SUCCESS, CONFIRMED_FAILURE, NOT_FOUND, PENDING_PROVIDER, UNKNOWN, CONFLICT, MANUAL_REVIEW_REQUIRED
+  reconciledAt           DateTime  @default(now())
+  createdAt              DateTime  @default(now())
+
+  @@index([merchantId, transactionId])
+  @@index([providerReference])
+  @@index([reconciliationOutcome])
 }

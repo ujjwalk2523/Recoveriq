@@ -51,6 +51,7 @@ interface AppStateContextType {
   updateSimulatorParams: (updated: Partial<SimulatorParams>) => void;
   simulateIncomingWebhook: (mockTxn?: Partial<Transaction>) => void;
   resetToDefaultData: () => void;
+  refreshFromBackend: () => Promise<void>;
 }
 
 const AppStateContext = createContext<AppStateContextType | undefined>(undefined);
@@ -67,7 +68,41 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(INITIAL_AUDIT_LOGS);
   const [isLoaded, setIsLoaded] = useState<boolean>(false);
 
-  // Load from local storage or initialize
+  // Function to sync live data from backend service layer
+  const refreshFromBackend = async () => {
+    try {
+      const [txnsRes, merchantRes, auditRes] = await Promise.all([
+        fetch('/api/transactions'),
+        fetch('/api/merchants/me'),
+        fetch('/api/audit-logs'),
+      ]);
+
+      if (txnsRes.ok) {
+        const tData = await txnsRes.json();
+        if (tData.transactions && Array.isArray(tData.transactions) && tData.transactions.length > 0) {
+          setTransactions(tData.transactions);
+        }
+      }
+
+      if (merchantRes.ok) {
+        const mData = await merchantRes.json();
+        if (mData.policies) {
+          setPolicies(mData.policies);
+        }
+      }
+
+      if (auditRes.ok) {
+        const aData = await auditRes.json();
+        if (aData.auditLogs && Array.isArray(aData.auditLogs) && aData.auditLogs.length > 0) {
+          setAuditLogs(aData.auditLogs);
+        }
+      }
+    } catch (err) {
+      console.warn('[AppState] Backend sync failed, keeping current data:', err);
+    }
+  };
+
+  // Load from local storage and sync with backend API
   useEffect(() => {
     try {
       const savedTxns = localStorage.getItem('rcvq_transactions');
@@ -92,6 +127,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setTransactions(generateInitialTransactions());
     } finally {
       setIsLoaded(true);
+      // Attempt background synchronization with backend APIs
+      refreshFromBackend();
     }
   }, []);
 
@@ -166,12 +203,24 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setAuditLogs(prev => [newEntry, ...prev]);
   };
 
-  // Action: Single Approve
+  // Action: Single Approve (Connected to Backend API)
   const approveTransaction = async (id: string, customAction?: RecoveryActionType) => {
     const txn = transactions.find(t => t.id === id);
     if (!txn) return;
 
     const actionToRun = customAction || txn.recommendedAction;
+
+    // Call backend API in parallel
+    try {
+      fetch(`/api/transactions/${id}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actionType: actionToRun }),
+      }).catch(e => console.warn('Backend approve call background error:', e));
+    } catch {
+      // ignore
+    }
+
     const execution = await razorpayService.executeRecoveryAction({
       transactionId: txn.id,
       actionType: actionToRun,
@@ -244,8 +293,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Action: Reject / Suppress
+  // Action: Reject / Suppress (Connected to Backend API)
   const rejectTransaction = (id: string, reason: string) => {
+    try {
+      fetch(`/api/transactions/${id}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      }).catch(e => console.warn('Backend reject call background error:', e));
+    } catch {
+      // ignore
+    }
+
     setTransactions(prev =>
       prev.map(t => {
         if (t.id !== id) return t;
@@ -298,74 +357,175 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Action: Manual Execution
+  // Action: Execute Manual Retry
   const executeManualRetry = async (id: string, action: RecoveryActionType) => {
     await approveTransaction(id, action);
   };
 
-  // Action: Update Policies
+  // Action: Update Policies (Connected to Backend API)
   const updatePolicies = (updated: Partial<PolicyGuardrails>) => {
-    setPolicies(prev => {
-      const next = { ...prev, ...updated };
-      appendAuditLog(
-        'MERCHANT_ADMIN',
-        'Merchant Admin',
-        'UPDATE_POLICIES',
-        'POLICY',
-        next.id,
-        `Updated policy guardrails: Auto-approve limit ₹${next.autoApproveMaxAmount}, Min confidence ${next.minConfidenceForAutoApprove}%.`
-      );
-      return next;
-    });
+    setPolicies(prev => ({ ...prev, ...updated }));
+    try {
+      fetch('/api/merchants/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated),
+      }).catch(e => console.warn('Backend policy update background error:', e));
+    } catch {
+      // ignore
+    }
+    appendAuditLog(
+      'MERCHANT_ADMIN',
+      'Merchant Admin (ujjwal@saasify.in)',
+      'UPDATE_POLICY',
+      'POLICY',
+      'pol_saasify_001',
+      `Updated policy guardrails: ${Object.keys(updated).join(', ')}`
+    );
   };
 
-  // Action: Update Simulator
+  // Action: Update Simulator Parameters
   const updateSimulatorParams = (updated: Partial<SimulatorParams>) => {
     setSimulatorParams(prev => ({ ...prev, ...updated }));
   };
 
-  // Action: Simulate Incoming Failed Webhook
+  // Action: Simulate Incoming Webhook
   const simulateIncomingWebhook = (mockTxn?: Partial<Transaction>) => {
-    const rawList = generateInitialTransactions();
-    const template = rawList[Math.floor(Math.random() * rawList.length)];
-    const newId = `txn_rcvq_${Date.now().toString().slice(-4)}`;
-    const randomAmounts = [2499, 4999, 8500, 14900, 28000, 65000];
-    const amount = mockTxn?.amount || randomAmounts[Math.floor(Math.random() * randomAmounts.length)];
-
-    const newTxn: Transaction = {
-      ...template,
-      id: newId,
-      orderId: `ord_live_${Math.random().toString(36).substring(2, 8)}`,
-      paymentId: `pay_live_${Math.random().toString(36).substring(2, 10)}`,
-      amount,
+    const defaultNewTxn: Transaction = {
+      id: `txn_live_${Date.now()}`,
+      merchantId: 'mer_saasify_blr',
+      merchantName: 'SaaSify Technologies India Pvt Ltd',
+      orderId: `order_in_${Math.floor(100000 + Math.random() * 900000)}`,
+      paymentId: `pay_rzp_${Math.random().toString(36).substring(2, 10)}`,
+      amount: Math.floor(2000 + Math.random() * 18000),
+      currency: 'INR',
+      paymentMethod: 'UPI',
       status: 'NEEDS_APPROVAL',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      requiresApproval: amount > policies.autoApproveMaxAmount,
-      ...mockTxn,
+      failureCode: 'INSUFFICIENT_FUNDS_OR_LIMIT',
+      failureMessage: 'Payment declined due to bank daily limit on UPI debit',
+      failureCategory: 'INSUFFICIENT_FUNDS',
+      customer: {
+        id: `cust_${Math.random().toString(36).substring(2, 6)}`,
+        name: 'Arjun Venkatesh',
+        email: 'arjun.v@innovatetech.in',
+        phone: '+91 99801 77312',
+        segment: 'ENTERPRISE',
+        lifetimeValue: 145000,
+        totalTransactions: 12,
+        pastRecoveries: 2,
+        fatigueScore: 24,
+        riskScore: 11,
+        upiVpa: 'arjunv@oksbi',
+        bankName: 'State Bank of India',
+      },
+      recoveryProbability: 0.81,
+      expectedRecoveryValue: 11200,
+      recommendedAction: 'OPTIMAL_DELAYED_RETRY',
+      actionConfidence: 86,
+      aiRationale: 'UPI daily debit cap reached. Historical clearance occurs within 6 hours. Delayed retry projected at 81% success.',
+      evBreakdown: {
+        expectedValue: 11200,
+        successProbability: 0.81,
+        grossPotential: 12500,
+        interventionCost: 15,
+        fatiguePenaltyCost: 20,
+        netEV: 11200,
+        confidenceScore: 86,
+      },
+      strategyYields: [],
+      requiresApproval: true,
+      approvalReason: 'Enterprise Segment & Amount threshold requires sign-off',
+      decisionTrace: [
+        {
+          step: 1,
+          name: 'DETECT',
+          timestamp: new Date().toISOString(),
+          status: 'COMPLETED',
+          summary: 'Incoming webhook: payment.failed captured from Razorpay.',
+          details: { gateway: 'Razorpay', event: 'payment.failed' },
+        },
+        {
+          step: 2,
+          name: 'DIAGNOSE',
+          timestamp: new Date().toISOString(),
+          status: 'COMPLETED',
+          summary: 'Classified failure: INSUFFICIENT_FUNDS (Temporary Bank Limit)',
+          details: {},
+        },
+        {
+          step: 3,
+          name: 'PREDICT',
+          timestamp: new Date().toISOString(),
+          status: 'COMPLETED',
+          summary: '81% recovery probability predicted based on historical UPI limit resets.',
+          details: {},
+        },
+        {
+          step: 4,
+          name: 'SIMULATE',
+          timestamp: new Date().toISOString(),
+          status: 'COMPLETED',
+          summary: 'Net EV calculated: ₹11,200',
+          details: {},
+        },
+        {
+          step: 5,
+          name: 'OPTIMIZE',
+          timestamp: new Date().toISOString(),
+          status: 'COMPLETED',
+          summary: 'Recommended Action: OPTIMAL_DELAYED_RETRY (Confidence 86%)',
+          details: {},
+        },
+        {
+          step: 6,
+          name: 'APPROVE',
+          timestamp: new Date().toISOString(),
+          status: 'AWAITING_APPROVAL',
+          summary: 'Guardrail trigger: Enterprise Tier transaction requires manual approval.',
+          details: {},
+        },
+        {
+          step: 7,
+          name: 'EXECUTE',
+          timestamp: new Date().toISOString(),
+          status: 'AWAITING_APPROVAL',
+          summary: 'Awaiting operator sign-off before dispatching retry.',
+          details: {},
+        },
+        {
+          step: 8,
+          name: 'MEASURE',
+          timestamp: new Date().toISOString(),
+          status: 'IN_PROGRESS',
+          summary: 'Pending recovery resolution.',
+          details: {},
+        },
+      ],
     };
 
-    setTransactions(prev => [newTxn, ...prev]);
+    const finalTxn = { ...defaultNewTxn, ...mockTxn } as Transaction;
+    setTransactions(prev => [finalTxn, ...prev]);
 
     appendAuditLog(
       'GATEWAY_WEBHOOK',
-      'Razorpay Switch Ingestion',
-      'PAYMENT_FAILED_WEBHOOK',
+      'Razorpay Ingestion Engine',
+      'CAPTURE_FAILURE',
       'TRANSACTION',
-      newId,
-      `Captured incoming payment failure for ₹${amount.toLocaleString('en-IN')}. Failure code: ${newTxn.failureCode}. Evaluated EV: ₹${newTxn.expectedRecoveryValue.toLocaleString('en-IN')}.`
+      finalTxn.id,
+      `Captured failed payment of ₹${finalTxn.amount.toLocaleString('en-IN')} for ${finalTxn.customer.name}`
     );
   };
 
-  // Action: Reset Data
+  // Action: Reset
   const resetToDefaultData = () => {
-    const initial = generateInitialTransactions();
-    setTransactions(initial);
+    localStorage.clear();
+    setTransactions(generateInitialTransactions());
     setPolicies(DEFAULT_POLICY_GUARDRAILS);
     setSimulatorParams(DEFAULT_SIMULATOR_PARAMS);
     setExperiments(INITIAL_EXPERIMENTS);
     setAuditLogs(INITIAL_AUDIT_LOGS);
-    localStorage.clear();
   };
 
   return (
@@ -392,6 +552,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         updateSimulatorParams,
         simulateIncomingWebhook,
         resetToDefaultData,
+        refreshFromBackend,
       }}
     >
       {children}

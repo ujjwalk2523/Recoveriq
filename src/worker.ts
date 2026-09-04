@@ -1,3 +1,4 @@
+import http from 'http';
 import { DistributedRecoveryWorker } from './lib/workers/recovery-worker';
 import { shutdownCoordinator } from './lib/runtime/shutdown';
 import { logger } from './lib/observability/logger';
@@ -19,6 +20,28 @@ async function main() {
 
   await worker.start();
   logger.info(`[WorkerDaemon] Worker ${worker.workerId} is active and processing jobs.`);
+
+  // Optional lightweight HTTP health probe for cloud PaaS (e.g. Render Web Service free tier)
+  const port = process.env.PORT ? parseInt(process.env.PORT, 10) : undefined;
+  if (port) {
+    const server = http.createServer((req, res) => {
+      if (req.url === '/health' || req.url === '/') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', workerId: worker.workerId, uptime: process.uptime() }));
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+
+    server.listen(port, '0.0.0.0', () => {
+      logger.info(`[WorkerDaemon] Cloud health probe listening on port ${port}`);
+    });
+
+    shutdownCoordinator.registerHook('worker.http.stop', async () => {
+      server.close();
+    });
+  }
 }
 
 main().catch((err) => {

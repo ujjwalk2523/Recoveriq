@@ -36,6 +36,7 @@ interface AppStateContextType {
   // Data
   merchant: MerchantOverview;
   transactions: Transaction[];
+  setTransactions: React.Dispatch<React.SetStateAction<Transaction[]>>;
   policies: PolicyGuardrails;
   simulatorParams: SimulatorParams;
   simulationResults: SimulatorResult[];
@@ -70,13 +71,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   // Function to sync live data from backend service layer
   const refreshFromBackend = async () => {
+    // 1. Fetch live transactions independently with cache-busting
     try {
-      const [txnsRes, merchantRes, auditRes] = await Promise.all([
-        fetch('/api/transactions'),
-        fetch('/api/merchants/me'),
-        fetch('/api/audit-logs'),
-      ]);
-
+      const txnsRes = await fetch(`/api/transactions?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+      });
       if (txnsRes.ok) {
         const tData = await txnsRes.json();
         if (tData.transactions && Array.isArray(tData.transactions) && tData.transactions.length > 0) {
@@ -86,14 +86,32 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           } catch {}
         }
       }
+    } catch (err) {
+      console.warn('[AppState] Failed to sync transactions:', err);
+    }
 
+    // 2. Fetch live merchant & policies independently
+    try {
+      const merchantRes = await fetch(`/api/merchants/me?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+      });
       if (merchantRes.ok) {
         const mData = await merchantRes.json();
         if (mData.policies) {
           setPolicies(mData.policies);
         }
       }
+    } catch (err) {
+      console.warn('[AppState] Failed to sync merchant:', err);
+    }
 
+    // 3. Fetch audit logs independently
+    try {
+      const auditRes = await fetch(`/api/audit-logs?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+      });
       if (auditRes.ok) {
         const aData = await auditRes.json();
         if (aData.auditLogs && Array.isArray(aData.auditLogs) && aData.auditLogs.length > 0) {
@@ -101,7 +119,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         }
       }
     } catch (err) {
-      console.warn('[AppState] Backend sync failed, keeping current data:', err);
+      console.warn('[AppState] Failed to sync audit logs:', err);
     }
   };
 
@@ -542,6 +560,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         setRazorpayKeyId,
         merchant,
         transactions,
+        setTransactions,
         policies,
         simulatorParams,
         simulationResults,

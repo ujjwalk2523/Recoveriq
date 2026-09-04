@@ -21,6 +21,7 @@ import {
 export default function TransactionsPage() {
   const {
     transactions,
+    setTransactions,
     approveTransaction,
     batchApproveTransactions,
     simulateIncomingWebhook,
@@ -28,16 +29,61 @@ export default function TransactionsPage() {
   } = useAppState();
 
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  const [lastSyncTime, setLastSyncTime] = useState<string>('');
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(true);
 
-  // Automatically sync live transactions from Neon DB on page mount
+  // Direct sync function that fetches fresh transactions from Neon DB with no caching
+  const handleRefresh = async (silent = false) => {
+    if (!silent) setIsRefreshing(true);
+    try {
+      const res = await fetch(`/api/transactions?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.transactions && Array.isArray(data.transactions)) {
+          setTransactions(data.transactions);
+          try {
+            localStorage.setItem('rcvq_transactions', JSON.stringify(data.transactions));
+          } catch {}
+          const nowStr = new Date().toLocaleTimeString();
+          setLastSyncTime(nowStr);
+          if (!silent) {
+            const latest = data.transactions[0];
+            const msg = latest?.orderId
+              ? `Synced ${data.transactions.length} live records! Latest: ₹${latest.amount} (${latest.customer?.name || 'Customer'} - ${latest.orderId})`
+              : `Synced ${data.transactions.length} transactions from Neon DB.`;
+            setSyncStatus(msg);
+            setTimeout(() => setSyncStatus(null), 6000);
+          }
+        }
+      } else {
+        if (!silent) setSyncStatus(`Sync error: Server returned HTTP ${res.status}`);
+      }
+    } catch (e: any) {
+      if (!silent) setSyncStatus(`Sync failed: ${e?.message || 'Network error'}`);
+    } finally {
+      if (!silent) setIsRefreshing(false);
+    }
+  };
+
+  // Initial sync on mount and auto-sync polling every 5 seconds
   useEffect(() => {
-    refreshFromBackend();
-  }, []);
+    handleRefresh(true);
+    if (!autoSyncEnabled) return;
+    const timer = setInterval(() => {
+      handleRefresh(true);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [autoSyncEnabled]);
 
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    await refreshFromBackend();
-    setIsRefreshing(false);
+  const handleClearCacheAndSync = () => {
+    try {
+      localStorage.removeItem('rcvq_transactions');
+    } catch {}
+    handleRefresh(false);
   };
 
   const [search, setSearch] = useState('');
@@ -63,37 +109,42 @@ export default function TransactionsPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Filtered & Sorted transactions
+  // Filtered & Sorted transactions with robust null-safety
   const filteredTransactions = useMemo(() => {
     return transactions
       .filter((t) => {
         const q = search.toLowerCase();
         const matchesSearch =
           !search ||
-          t.id.toLowerCase().includes(q) ||
-          t.orderId.toLowerCase().includes(q) ||
-          t.customer.name.toLowerCase().includes(q) ||
-          t.customer.email.toLowerCase().includes(q) ||
-          t.customer.phone.includes(q) ||
-          t.failureCode.toLowerCase().includes(q) ||
-          (t.customer.upiVpa && t.customer.upiVpa.toLowerCase().includes(q));
+          t.id?.toLowerCase().includes(q) ||
+          t.orderId?.toLowerCase().includes(q) ||
+          t.customer?.name?.toLowerCase().includes(q) ||
+          t.customer?.email?.toLowerCase().includes(q) ||
+          t.customer?.phone?.includes(q) ||
+          t.failureCode?.toLowerCase().includes(q) ||
+          (t.customer?.upiVpa && t.customer.upiVpa.toLowerCase().includes(q));
 
         const matchesStatus = statusFilter === 'ALL' || t.status === statusFilter;
         const matchesMethod = methodFilter === 'ALL' || t.paymentMethod === methodFilter;
         const matchesCategory = categoryFilter === 'ALL' || t.failureCategory === categoryFilter;
 
         let matchesAmount = true;
-        if (amountRange === 'UNDER_5K') matchesAmount = t.amount < 5000;
-        else if (amountRange === '5K_TO_20K') matchesAmount = t.amount >= 5000 && t.amount <= 20000;
-        else if (amountRange === 'OVER_20K') matchesAmount = t.amount > 20000;
+        const amt = t.amount || 0;
+        if (amountRange === 'UNDER_5K') matchesAmount = amt < 5000;
+        else if (amountRange === '5K_TO_20K') matchesAmount = amt >= 5000 && amt <= 20000;
+        else if (amountRange === 'OVER_20K') matchesAmount = amt > 20000;
 
         return matchesSearch && matchesStatus && matchesMethod && matchesCategory && matchesAmount;
       })
       .sort((a, b) => {
         let diff = 0;
-        if (sortBy === 'amount') diff = a.amount - b.amount;
-        else if (sortBy === 'ev') diff = a.expectedRecoveryValue - b.expectedRecoveryValue;
-        else diff = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        if (sortBy === 'amount') diff = (a.amount || 0) - (b.amount || 0);
+        else if (sortBy === 'ev') diff = (a.expectedRecoveryValue || 0) - (b.expectedRecoveryValue || 0);
+        else {
+          const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          diff = dateA - dateB;
+        }
 
         return sortOrder === 'asc' ? diff : -diff;
       });
@@ -183,6 +234,23 @@ export default function TransactionsPage() {
       title="Transactions"
       subtitle="Complete ledger of failed, recovering, and recovered customer payments"
     >
+      {/* Live Sync Status Banner */}
+      {syncStatus && (
+        <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-center justify-between shadow-xs animate-in fade-in slide-in-from-top-2 duration-200">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span className="font-semibold">{syncStatus}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSyncStatus(null)}
+            className="text-emerald-700 hover:text-emerald-900 p-0.5 rounded cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Control Bar */}
       <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-xs space-y-3">
         <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
@@ -208,15 +276,38 @@ export default function TransactionsPage() {
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={handleRefresh}
-              disabled={isRefreshing}
-              className="px-3 py-2 text-xs font-medium rounded-lg text-slate-700 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+              onClick={() => setAutoSyncEnabled(!autoSyncEnabled)}
+              title={autoSyncEnabled ? 'Live auto-polling every 5s is ACTIVE' : 'Auto-sync is paused'}
+              className={`px-2.5 py-2 text-xs font-medium rounded-lg border transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs ${
+                autoSyncEnabled
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800 font-semibold'
+                  : 'bg-white border-slate-200 text-slate-500 hover:text-slate-700'
+              }`}
             >
-              <RotateCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span className={`w-2 h-2 rounded-full ${autoSyncEnabled ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`} />
+              <span>{autoSyncEnabled ? 'Live Syncing (5s)' : 'Auto-Sync Off'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleRefresh(false)}
+              disabled={isRefreshing}
+              className="px-3 py-2 text-xs font-semibold rounded-lg text-slate-800 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+            >
+              <RotateCw className={`w-3.5 h-3.5 text-blue-600 ${isRefreshing ? 'animate-spin' : ''}`} />
               <span>{isRefreshing ? 'Syncing...' : 'Sync Live'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleClearCacheAndSync}
+              title="Clear browser cache and reload fresh from database"
+              className="px-2.5 py-2 text-xs font-medium rounded-lg text-slate-600 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-50 transition-colors cursor-pointer shadow-xs"
+            >
+              Reset Cache
             </button>
 
             <button
@@ -442,20 +533,28 @@ export default function TransactionsPage() {
                       </td>
 
                       <td className="py-3.5 px-3 font-mono font-medium text-slate-900">
-                        <div>{txn.id}</div>
+                        <div className="flex items-center gap-1.5">
+                          <span>{txn.id}</span>
+                          {(txn.orderId?.startsWith('order_') || txn.id?.startsWith('cmtn')) && (
+                            <span className="px-1.5 py-0.2 rounded text-[9px] font-sans font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200 uppercase tracking-wider">
+                              LIVE RZP
+                            </span>
+                          )}
+                        </div>
                         <div className="text-[10px] text-slate-400 font-normal">{txn.orderId}</div>
                       </td>
 
                       <td className="py-3.5 px-3">
-                        <div className="font-medium text-slate-900">{txn.customer.name}</div>
+                        <div className="font-medium text-slate-900">{txn.customer?.name || 'Customer'}</div>
                         <div className="text-[10px] text-slate-500 flex items-center gap-1.5 mt-0.5">
                           <MethodBadge method={txn.paymentMethod} />
-                          <span>{txn.customer.segment}</span>
+                          <span>{txn.customer?.segment || 'CONSUMER'}</span>
+                          {txn.customer?.phone && <span className="font-mono text-slate-400 text-[10px]">{txn.customer.phone}</span>}
                         </div>
                       </td>
 
                       <td className="py-3.5 px-3 font-semibold text-slate-900 font-mono">
-                        ₹{txn.amount.toLocaleString('en-IN')}
+                        ₹{(txn.amount || 0).toLocaleString('en-IN')}
                       </td>
 
                       <td className="py-3.5 px-3">

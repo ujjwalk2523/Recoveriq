@@ -449,27 +449,40 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   // Action: Simulate Incoming Webhook
   const simulateIncomingWebhook = (mockTxn?: Partial<Transaction>) => {
+    const amount = mockTxn?.amount ?? Math.floor(3500 + Math.random() * 12000);
+    const confidence = 87;
+    const customerSegment = amount > 25000 ? 'VIP' : amount > 15000 ? 'ENTERPRISE' : 'CONSUMER';
+    
+    // Evaluate against active policy guardrails
+    const isWithinAmountCeiling = amount <= policies.autoApproveMaxAmount;
+    const isConfidenceSufficient = confidence >= policies.minConfidenceForAutoApprove;
+    const isVipBlocked = policies.humanApprovalForVIPs && (customerSegment === 'VIP' || customerSegment === 'ENTERPRISE');
+    const isWhatsAppAllowed = policies.allowAutomatedWhatsAppNudges;
+
+    const isAutoApproved = isWithinAmountCeiling && isConfidenceSufficient && !isVipBlocked && isWhatsAppAllowed;
+    const recommendedAction: RecoveryActionType = isWhatsAppAllowed ? 'WHATSAPP_NUDGE' : 'PAYMENT_LINK';
+
     const defaultNewTxn: Transaction = {
       id: `txn_live_${Date.now()}`,
       merchantId: 'mer_saasify_blr',
       merchantName: 'SaaSify Technologies India Pvt Ltd',
       orderId: `order_in_${Math.floor(100000 + Math.random() * 900000)}`,
       paymentId: `pay_rzp_${Math.random().toString(36).substring(2, 10)}`,
-      amount: Math.floor(2000 + Math.random() * 18000),
+      amount,
       currency: 'INR',
       paymentMethod: 'UPI',
-      status: 'NEEDS_APPROVAL',
+      status: isAutoApproved ? 'RECOVERING' : 'NEEDS_APPROVAL',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       failureCode: 'INSUFFICIENT_FUNDS_OR_LIMIT',
-      failureMessage: 'Payment declined due to bank daily limit on UPI debit',
+      failureMessage: 'Payment declined due to temporary bank UPI authorization limit',
       failureCategory: 'INSUFFICIENT_FUNDS',
       customer: {
         id: `cust_${Math.random().toString(36).substring(2, 6)}`,
         name: 'Arjun Venkatesh',
         email: 'arjun.v@innovatetech.in',
         phone: '+91 99801 77312',
-        segment: 'ENTERPRISE',
+        segment: customerSegment as any,
         lifetimeValue: 145000,
         totalTransactions: 12,
         pastRecoveries: 2,
@@ -478,23 +491,26 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         upiVpa: 'arjunv@oksbi',
         bankName: 'State Bank of India',
       },
-      recoveryProbability: 0.81,
-      expectedRecoveryValue: 11200,
-      recommendedAction: 'OPTIMAL_DELAYED_RETRY',
-      actionConfidence: 86,
-      aiRationale: 'UPI daily debit cap reached. Historical clearance occurs within 6 hours. Delayed retry projected at 81% success.',
+      recoveryProbability: 0.84,
+      expectedRecoveryValue: Math.round(amount * 0.84),
+      recommendedAction,
+      actionConfidence: confidence,
+      aiRationale: isAutoApproved
+        ? 'Auto-approved by Policy Guardrails. Instant 1-tap WhatsApp nudge with direct UPI intent link dispatched to customer.'
+        : 'Enterprise Tier or Policy Threshold mandates manual operator sign-off.',
       evBreakdown: {
-        expectedValue: 11200,
-        successProbability: 0.81,
-        grossPotential: 12500,
-        interventionCost: 15,
-        fatiguePenaltyCost: 20,
-        netEV: 11200,
-        confidenceScore: 86,
+        expectedValue: Math.round(amount * 0.84),
+        successProbability: 0.84,
+        grossPotential: amount,
+        interventionCost: 1.5,
+        fatiguePenaltyCost: 10,
+        netEV: Math.round(amount * 0.84) - 12,
+        confidenceScore: confidence,
       },
       strategyYields: [],
-      requiresApproval: true,
-      approvalReason: 'Enterprise Segment & Amount threshold requires sign-off',
+      requiresApproval: !isAutoApproved,
+      approvalReason: isAutoApproved ? undefined : 'Amount ceiling or VIP segment mandates manual operator sign-off',
+      executionStatus: isAutoApproved ? 'DISPATCHED' : 'PENDING',
       decisionTrace: [
         {
           step: 1,
@@ -509,7 +525,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           name: 'DIAGNOSE',
           timestamp: new Date().toISOString(),
           status: 'COMPLETED',
-          summary: 'Classified failure: INSUFFICIENT_FUNDS (Temporary Bank Limit)',
+          summary: 'Classified failure: INSUFFICIENT_FUNDS (Temporary Bank UPI Limit)',
           details: {},
         },
         {
@@ -517,7 +533,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           name: 'PREDICT',
           timestamp: new Date().toISOString(),
           status: 'COMPLETED',
-          summary: '81% recovery probability predicted based on historical UPI limit resets.',
+          summary: '84% recovery probability predicted via ML model for immediate WhatsApp nudge.',
           details: {},
         },
         {
@@ -525,7 +541,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           name: 'SIMULATE',
           timestamp: new Date().toISOString(),
           status: 'COMPLETED',
-          summary: 'Net EV calculated: ₹11,200',
+          summary: `Net EV calculated: ₹${(Math.round(amount * 0.84) - 12).toLocaleString('en-IN')}`,
           details: {},
         },
         {
@@ -533,23 +549,27 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           name: 'OPTIMIZE',
           timestamp: new Date().toISOString(),
           status: 'COMPLETED',
-          summary: 'Recommended Action: OPTIMAL_DELAYED_RETRY (Confidence 86%)',
+          summary: `Selected Channel: ${recommendedAction} (Confidence ${confidence}%)`,
           details: {},
         },
         {
           step: 6,
           name: 'APPROVE',
           timestamp: new Date().toISOString(),
-          status: 'AWAITING_APPROVAL',
-          summary: 'Guardrail trigger: Enterprise Tier transaction requires manual approval.',
+          status: isAutoApproved ? 'COMPLETED' : 'AWAITING_APPROVAL',
+          summary: isAutoApproved
+            ? `Autonomous policy cleared: Amount ₹${amount.toLocaleString('en-IN')} is within ₹${policies.autoApproveMaxAmount.toLocaleString('en-IN')} ceiling and VIP manual review is disabled.`
+            : 'Guardrail trigger: Policy threshold mandates manual operator review.',
           details: {},
         },
         {
           step: 7,
           name: 'EXECUTE',
           timestamp: new Date().toISOString(),
-          status: 'AWAITING_APPROVAL',
-          summary: 'Awaiting operator sign-off before dispatching retry.',
+          status: isAutoApproved ? 'COMPLETED' : 'AWAITING_APPROVAL',
+          summary: isAutoApproved
+            ? 'Meta WhatsApp Business API: Interactive 1-tap WhatsApp nudge with UPI deep link dispatched instantly to +91 99801 77312.'
+            : 'Awaiting operator sign-off before dispatching retry.',
           details: {},
         },
         {
@@ -557,7 +577,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           name: 'MEASURE',
           timestamp: new Date().toISOString(),
           status: 'IN_PROGRESS',
-          summary: 'Pending recovery resolution.',
+          summary: isAutoApproved
+            ? 'WhatsApp message delivered. Tracking customer 1-tap recovery.'
+            : 'Pending recovery resolution.',
           details: {},
         },
       ],
@@ -569,10 +591,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     appendAuditLog(
       'GATEWAY_WEBHOOK',
       'Razorpay Ingestion Engine',
-      'CAPTURE_FAILURE',
+      isAutoApproved ? 'AUTO_DISPATCH' : 'CAPTURE_FAILURE',
       'TRANSACTION',
       finalTxn.id,
-      `Captured failed payment of ₹${finalTxn.amount.toLocaleString('en-IN')} for ${finalTxn.customer.name}`
+      isAutoApproved
+        ? `Captured failed payment of ₹${finalTxn.amount.toLocaleString('en-IN')} & auto-dispatched WhatsApp 1-tap nudge to ${finalTxn.customer.name}`
+        : `Captured failed payment of ₹${finalTxn.amount.toLocaleString('en-IN')} for ${finalTxn.customer.name} (Requires Manual Sign-off)`
     );
   };
 

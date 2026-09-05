@@ -649,13 +649,15 @@ export function TransactionDrawer({ transaction, onClose }: TransactionDrawerPro
           <button
             type="button"
             onClick={handleApprove}
-            disabled={isExecuting || transaction.status === 'RECOVERED'}
+            disabled={isExecuting || transaction.status === 'RECOVERED' || (transaction.status === 'RECOVERING' && !customAction)}
             className="px-5 py-2 text-xs font-semibold rounded-lg bg-slate-900 hover:bg-slate-800 text-white shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
           >
             {isExecuting
               ? 'Executing...'
               : transaction.status === 'RECOVERED'
               ? 'Settled'
+              : transaction.status === 'RECOVERING'
+              ? (customAction ? `Dispatch ${customAction}` : 'Dispatched (Auto-Approved)')
               : `Approve (₹${transaction.expectedRecoveryValue.toLocaleString('en-IN')} EV)`}
           </button>
         </div>
